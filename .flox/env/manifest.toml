@@ -25,6 +25,7 @@ jq.pkg-path = "jq"
 gnused.pkg-path = "gnused"
 gawk.pkg-path = "gawk"
 git.pkg-path = "git"
+gum.pkg-path = "gum"
 
 
 [vars]

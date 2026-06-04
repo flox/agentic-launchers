@@ -2,6 +2,62 @@
 # Ensures a model is loaded in omlx, downloading from HuggingFace if missing.
 # Sets OMLX_API_KEY on success.
 
+_hf_token_from_keychain() {
+  [[ "$(uname)" == "Darwin" ]] || return 1
+  security find-generic-password -s "huggingface-token" -a "default" -w 2>/dev/null
+}
+
+_hf_token_save_keychain() {
+  local token="$1"
+  [[ "$(uname)" == "Darwin" ]] || return 1
+  security add-generic-password -s "huggingface-token" -a "default" -U -w "$token" 2>/dev/null
+}
+
+# Resolves a HuggingFace token via (in order):
+#   1. macOS keychain
+#   2. ~/.cache/huggingface/token (HF CLI standard location)
+#   3. Interactive gum prompt (TTY only); saves result for future runs
+# Outputs the token to stdout. Returns 1 on failure.
+_hf_token_get() {
+  local model="${1:-model}"
+  local token=""
+
+  token="$(_hf_token_from_keychain)" || true
+
+  if [[ -z "$token" && -f "$HOME/.cache/huggingface/token" ]]; then
+    token="$(<"$HOME/.cache/huggingface/token")"
+  fi
+
+  if [[ -z "$token" ]]; then
+    if [[ ! -t 2 ]]; then
+      echo "Error: HuggingFace token required to download '${model}'." >&2
+      echo "  Run this command in an interactive terminal, or populate ~/.cache/huggingface/token" >&2
+      return 1
+    fi
+    if command -v gum &>/dev/null; then
+      token="$(gum input --password \
+        --header "HuggingFace token required to download '${model}'." \
+        --placeholder "hf_..." \
+        --char-limit 0)" || { echo "Aborted." >&2; return 1; }
+    else
+      read -rsp "HuggingFace token: " token </dev/tty
+      echo >&2
+    fi
+    if [[ -z "$token" ]]; then
+      echo "Error: no token provided." >&2
+      return 1
+    fi
+    if _hf_token_save_keychain "$token"; then
+      echo "  Token saved to macOS keychain." >&2
+    fi
+    mkdir -p "$HOME/.cache/huggingface"
+    printf '%s' "$token" > "$HOME/.cache/huggingface/token"
+    chmod 600 "$HOME/.cache/huggingface/token"
+  fi
+
+  printf '%s' "$token"
+}
+
 omlx_ensure_model() {
   local model="$1" host="$2" port="$3"
   local base="http://${host}:${port}"
@@ -30,16 +86,8 @@ omlx_ensure_model() {
     return 0
   fi
 
-  # Model not loaded — need HuggingFace token to download
-  local hf_token=""
-  if [[ -f "$HOME/.cache/huggingface/token" ]]; then
-    hf_token="$(cat "$HOME/.cache/huggingface/token")"
-  fi
-  if [[ -z "$hf_token" ]]; then
-    echo "Error: HuggingFace token required to download ${model}" >&2
-    echo "  Run: huggingface-cli login" >&2
-    return 1
-  fi
+  local hf_token
+  hf_token="$(_hf_token_get "$model")" || return 1
 
   # Admin login (cookie-based session)
   local cookies
