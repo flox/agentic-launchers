@@ -19,7 +19,6 @@ hermes-agent.pkg-path = "flox/hermes-agent"
 hermes-agent.pkg-group = "hermes-agent"
 llamacpp-proxy.pkg-path = "flox-labs/llamacpp-proxy"
 llamacpp-proxy.pkg-group = "llamacpp-proxy"
-llamacpp-proxy.systems = ["aarch64-darwin", "aarch64-linux", "x86_64-linux"]
 bash.pkg-path = "bash"
 jq.pkg-path = "jq"
 gnused.pkg-path = "gnused"
@@ -39,6 +38,10 @@ on-activate = '''
   export OPENAI_API_KEY="${OPENAI_API_KEY:-ollama}"
   export OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
   export OMLX_PORT="${OMLX_PORT:-8000}"
+  export LLAMACPP_PROXY_OLLAMA_LISTEN="${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}"
+  export LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN="${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}"
+  export LLAMACPP_PROXY_OMLX_LISTEN="${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}"
+  export LLAMACPP_PROXY_GEMINI_OMLX_LISTEN="${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}"
 '''
 
 
@@ -48,10 +51,46 @@ common = '''
 '''
 
 
-[services]
+[services.llamacpp-proxy-ollama]
+command = '''
+  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" != "arm64" ]]; then
+    echo "llamacpp-proxy not supported on Intel Mac" >&2; exit 1
+  fi
+  model="$(cat "${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model" 2>/dev/null || true)"
+  [[ -z "$model" ]] && model="default"
+  exec llamacpp-proxy \
+    --listen "${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}" \
+    --backend "${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}" \
+    --backend-model "$model" \
+    --gemini-listen "${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}"
+'''
+
+[services.llamacpp-proxy-omlx]
+command = '''
+  if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" != "arm64" ]]; then
+    echo "llamacpp-proxy not supported on Intel Mac" >&2; exit 1
+  fi
+  key_file="${FLOX_ENV_CACHE}/omlx.api-key"
+  for _ in $(seq 1 30); do [[ -s "$key_file" ]] && break; sleep 1; done
+  if [[ ! -s "$key_file" ]]; then
+    echo "Error: omlx API key not found at $key_file — is omlx running?" >&2; exit 1
+  fi
+  model="$(cat "${FLOX_ENV_CACHE}/llamacpp-proxy-omlx.model" 2>/dev/null || true)"
+  [[ -z "$model" ]] && model="default"
+  exec llamacpp-proxy \
+    --listen "${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}" \
+    --backend "${OMLX_HOST:-127.0.0.1}:${OMLX_PORT:-8000}" \
+    --backend-api-key "$(cat "$key_file")" \
+    --backend-model "$model" \
+    --gemini-listen "${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}"
+'''
 
 
 [include]
+environments = [
+  { remote = "flox-labs/omlx" },
+#  { remote = "flox-labs/ollama" },
+]
 
 
 [options]

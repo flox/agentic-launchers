@@ -44,44 +44,11 @@ OMLX_PORT="${OMLX_PORT:-8000}"
 source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-PROXY_LISTEN="${LLAMACPP_PROXY_LISTEN:-127.0.0.1:8081}"
-GEMINI_LISTEN="${LLAMACPP_PROXY_GEMINI_LISTEN:-127.0.0.1:8082}"
-
-cleanup() {
-  if [[ -n "${PROXY_PID:-}" ]]; then
-    kill "$PROXY_PID" 2>/dev/null || true
-    wait "$PROXY_PID" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT INT TERM HUP
-
-PROXY_LOG="${FLOX_ENV_CACHE:-/tmp}/llamacpp-proxy-gemini.log"
-llamacpp-proxy \
-  --listen "$PROXY_LISTEN" \
-  --backend "$OMLX_HOST:$OMLX_PORT" \
-  --backend-api-key "$OMLX_API_KEY" \
-  --backend-model "$MODEL" \
-  --gemini-listen "$GEMINI_LISTEN" 2>>"$PROXY_LOG" &
-PROXY_PID=$!
-
-PROXY_READY=false
-for _ in $(seq 1 30); do
-  if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-    echo "Error: llamacpp-proxy failed to start (port ${PROXY_LISTEN} may be in use; see ${PROXY_LOG})" >&2
-    exit 1
-  fi
-  if curl -sf --connect-timeout 1 --max-time 2 "http://${PROXY_LISTEN}/health" >/dev/null 2>&1; then
-    PROXY_READY=true
-    break
-  fi
-  sleep 0.1
-done
-if [[ "$PROXY_READY" != true ]]; then
-  echo "Error: llamacpp-proxy did not become ready in time (see ${PROXY_LOG})" >&2
-  exit 1
-fi
+source "${BASH_SOURCE[0]%/*}/_proxy-ensure.sh"
+proxy_ensure_model "llamacpp-proxy-omlx" "$MODEL" \
+  "${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}" || exit 1
 
 export GEMINI_API_KEY="${GEMINI_API_KEY:-llamacpp-local}"
-export GOOGLE_GEMINI_BASE_URL="http://${GEMINI_LISTEN}"
+export GOOGLE_GEMINI_BASE_URL="http://${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}"
 
-gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}
+exec gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}

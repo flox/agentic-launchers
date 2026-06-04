@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Wrapper for gemini-cli to use ollama via llamacpp-proxy.
-# gemini-cli speaks the Gemini API protocol, so we need llamacpp-proxy
-# to translate Gemini API <-> OpenAI Chat Completions <-> ollama.
+# gemini-cli speaks the Gemini API protocol; llamacpp-proxy translates
+# Gemini API <-> OpenAI Chat Completions <-> ollama.
 #
 # NOTE: gemini-cli still writes session/state data to ~/.gemini/.
 # There is no --data-dir or equivalent to isolate this.
@@ -39,43 +39,11 @@ OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
 ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
 
-PROXY_LISTEN="${LLAMACPP_PROXY_LISTEN:-127.0.0.1:8081}"
-GEMINI_LISTEN="${LLAMACPP_PROXY_GEMINI_LISTEN:-127.0.0.1:8082}"
-
-cleanup() {
-  if [[ -n "${PROXY_PID:-}" ]]; then
-    kill "$PROXY_PID" 2>/dev/null || true
-    wait "$PROXY_PID" 2>/dev/null || true
-  fi
-}
-trap cleanup EXIT INT TERM HUP
-
-PROXY_LOG="${FLOX_ENV_CACHE:-/tmp}/llamacpp-proxy-gemini.log"
-llamacpp-proxy \
-  --listen "$PROXY_LISTEN" \
-  --backend "$OLLAMA_HOST:$OLLAMA_PORT" \
-  --backend-model "$MODEL" \
-  --gemini-listen "$GEMINI_LISTEN" 2>>"$PROXY_LOG" &
-PROXY_PID=$!
-
-PROXY_READY=false
-for _ in $(seq 1 30); do
-  if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-    echo "Error: llamacpp-proxy failed to start (port ${PROXY_LISTEN} may be in use; see ${PROXY_LOG})" >&2
-    exit 1
-  fi
-  if curl -sf --connect-timeout 1 --max-time 2 "http://${PROXY_LISTEN}/health" >/dev/null 2>&1; then
-    PROXY_READY=true
-    break
-  fi
-  sleep 0.1
-done
-if [[ "$PROXY_READY" != true ]]; then
-  echo "Error: llamacpp-proxy did not become ready in time (see ${PROXY_LOG})" >&2
-  exit 1
-fi
+source "${BASH_SOURCE[0]%/*}/_proxy-ensure.sh"
+proxy_ensure_model "llamacpp-proxy-ollama" "$MODEL" \
+  "${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}" || exit 1
 
 export GEMINI_API_KEY="${GEMINI_API_KEY:-llamacpp-local}"
-export GOOGLE_GEMINI_BASE_URL="http://${GEMINI_LISTEN}"
+export GOOGLE_GEMINI_BASE_URL="http://${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}"
 
-gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}
+exec gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}
