@@ -105,7 +105,7 @@ _omlx_key_get() {
     fi
   fi
 
-  # 3. Search common flox cache locations
+  # 3. flox-labs/omlx remote env cache (canonical), then broader flox cache tree
   local f
   while IFS= read -r f; do
     [[ -s "$f" ]] || continue
@@ -116,7 +116,7 @@ _omlx_key_get() {
       [[ -n "${FLOX_ENV_CACHE:-}" ]] && printf '%s' "$candidate" > "${FLOX_ENV_CACHE}/omlx.api-key"
       printf '%s' "$candidate"; return 0
     fi
-  done < <(find "$HOME/dev" "$HOME/.local/share/flox" \
+  done < <(find "$HOME/.cache/flox/remote" \
     -name "omlx.api-key" -maxdepth 4 2>/dev/null)
 
   echo "Error: could not find a valid omlx API key for ${host}:${port}" >&2
