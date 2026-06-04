@@ -2,6 +2,8 @@
 # Ensures a model is loaded in omlx, downloading from HuggingFace if missing.
 # Sets OMLX_API_KEY on success.
 
+# --- HF token helpers ---
+
 _hf_token_from_keychain() {
   [[ "$(uname)" == "Darwin" ]] || return 1
   security find-generic-password -s "huggingface-token" -a "default" -w 2>/dev/null
@@ -58,24 +60,82 @@ _hf_token_get() {
   printf '%s' "$token"
 }
 
+# --- omlx API key helpers ---
+
+_omlx_key_from_keychain() {
+  [[ "$(uname)" == "Darwin" ]] || return 1
+  security find-generic-password -s "omlx-api-key" -a "default" -w 2>/dev/null
+}
+
+_omlx_key_save_keychain() {
+  local key="$1"
+  [[ "$(uname)" == "Darwin" ]] || return 1
+  security add-generic-password -s "omlx-api-key" -a "default" -U -w "$key" 2>/dev/null
+}
+
+_omlx_key_verify() {
+  local key="$1" host="$2" port="$3"
+  curl -sf --connect-timeout 3 --max-time 5 \
+    -H "Authorization: Bearer $key" \
+    "http://${host}:${port}/v1/models" >/dev/null 2>&1
+}
+
+# Resolves the omlx API key matching the running omlx instance via:
+#   1. macOS keychain (verified against running omlx)
+#   2. $FLOX_ENV_CACHE/omlx.api-key (verified; saves to keychain on success)
+#   3. find under $HOME/dev and $HOME/.local/share/flox (verified; saves to
+#      keychain and $FLOX_ENV_CACHE on success for fast future lookups)
+# Outputs the key to stdout. Returns 1 if no valid key found.
+_omlx_key_get() {
+  local host="$1" port="$2"
+  local key="" candidate=""
+
+  # 1. Keychain
+  key="$(_omlx_key_from_keychain)" || true
+  if [[ -n "$key" ]] && _omlx_key_verify "$key" "$host" "$port"; then
+    printf '%s' "$key"; return 0
+  fi
+
+  # 2. Current env cache
+  if [[ -s "${FLOX_ENV_CACHE:-}/omlx.api-key" ]]; then
+    candidate="$(<"${FLOX_ENV_CACHE}/omlx.api-key")"
+    if _omlx_key_verify "$candidate" "$host" "$port"; then
+      _omlx_key_save_keychain "$candidate" || true
+      printf '%s' "$candidate"; return 0
+    fi
+  fi
+
+  # 3. Search common flox cache locations
+  local f
+  while IFS= read -r f; do
+    [[ -s "$f" ]] || continue
+    candidate="$(<"$f")"
+    [[ -z "$candidate" ]] && continue
+    if _omlx_key_verify "$candidate" "$host" "$port"; then
+      _omlx_key_save_keychain "$candidate" || true
+      [[ -n "${FLOX_ENV_CACHE:-}" ]] && printf '%s' "$candidate" > "${FLOX_ENV_CACHE}/omlx.api-key"
+      printf '%s' "$candidate"; return 0
+    fi
+  done < <(find "$HOME/dev" "$HOME/.local/share/flox" \
+    -name "omlx.api-key" -maxdepth 4 2>/dev/null)
+
+  echo "Error: could not find a valid omlx API key for ${host}:${port}" >&2
+  echo "  Is omlx running? Try: flox services status  (start with: flox activate -s)" >&2
+  return 1
+}
+
 omlx_ensure_model() {
   local model="$1" host="$2" port="$3"
   local base="http://${host}:${port}"
-  local key_file="${FLOX_ENV_CACHE:-$HOME/.cache/omlx}/omlx.api-key"
 
-  if [[ ! -s "$key_file" ]]; then
-    echo "Error: omlx API key not found at $key_file" >&2
-    echo "  Run: deepseek --model <model> (first-run bootstrap), or set FLOX_ENV_CACHE." >&2
-    return 1
-  fi
-  OMLX_API_KEY="$(cat "$key_file")"
+  OMLX_API_KEY="$(_omlx_key_get "$host" "$port")" || return 1
 
   local models
   if ! models="$(curl -sf --connect-timeout 5 --max-time 10 \
       -H "Authorization: Bearer $OMLX_API_KEY" \
       "$base/v1/models" 2>/dev/null)"; then
     echo "Error: cannot reach omlx at ${host}:${port}" >&2
-    echo "  Is omlx running? Try: flox services status omlx" >&2
+    echo "  Is omlx running? Try: flox services status" >&2
     return 1
   fi
 
@@ -106,7 +166,7 @@ omlx_ensure_model() {
   if [[ "$status" != "200" ]]; then
     rm -f "$cookies"
     echo "Error: omlx admin login failed (HTTP $status)" >&2
-    echo "  Is the API key in $key_file current? Try: flox services restart omlx" >&2
+    echo "  Try: flox services restart omlx" >&2
     return 1
   fi
 

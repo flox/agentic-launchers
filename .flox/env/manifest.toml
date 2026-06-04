@@ -77,7 +77,11 @@ command = '''
   key_file="${FLOX_ENV_CACHE}/omlx.api-key"
   for _ in $(seq 1 30); do [[ -s "$key_file" ]] && break; sleep 1; done
   if [[ ! -s "$key_file" ]]; then
-    echo "Error: omlx API key not found at $key_file — is omlx running?" >&2; exit 1
+    _kc="$(security find-generic-password -s "omlx-api-key" -a "default" -w 2>/dev/null || true)"
+    if [[ -z "$_kc" ]]; then
+      echo "Error: omlx API key not found — is omlx running?" >&2; exit 1
+    fi
+    printf '%s' "$_kc" > "$key_file"
   fi
   model="$(cat "${FLOX_ENV_CACHE}/llamacpp-proxy-omlx.model" 2>/dev/null || true)"
   [[ -z "$model" ]] && model="default"
