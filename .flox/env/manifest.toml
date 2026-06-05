@@ -27,6 +27,8 @@ git.pkg-path = "git"
 gum.pkg-path = "gum"
 flox-mcp-server.pkg-path = "flox/flox-mcp-server"
 flox-mcp-server.pkg-group = "flox-mcp-server"
+openclaw.pkg-path = "flox/openclaw"
+openclaw.pkg-group = "openclaw"
 
 
 [vars]

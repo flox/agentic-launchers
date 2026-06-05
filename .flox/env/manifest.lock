@@ -64,6 +64,10 @@
           "aarch64-darwin"
         ]
       },
+      "openclaw": {
+        "pkg-path": "flox/openclaw",
+        "pkg-group": "openclaw"
+      },
       "opencode": {
         "pkg-path": "flox/opencode",
         "pkg-group": "opencode"
@@ -211,6 +215,37 @@
       },
       "system": "aarch64-darwin",
       "group": "deepseek-tui",
+      "priority": 5
+    },
+    {
+      "attr_path": "flox-mcp-server",
+      "broken": false,
+      "derivation": "/nix/store/xqxwlh8kh7jl51n2b04bqb5xgcwl2g42-flox-mcp-server-0.2.2.drv",
+      "description": "MCP server for Flox package manager",
+      "install_id": "flox-mcp-server",
+      "license": "MIT",
+      "locked_url": "ssh://git@github.com/flox/mcp-server.git?rev=e727f1b0f40c70b0335091e1a876e582abcccb5a",
+      "name": "flox-mcp-server-0.2.2",
+      "pname": "flox-mcp-server",
+      "rev": "e727f1b0f40c70b0335091e1a876e582abcccb5a",
+      "rev_count": 32,
+      "rev_date": "2026-04-20T17:03:53Z",
+      "scrape_date": "2026-06-05T14:32:01.899270Z",
+      "stabilities": [
+        "staging",
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.2.2",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dist": "/nix/store/6y5c1wg3z3xaf7s8ffbjb0a0l8xqypm8-flox-mcp-server-0.2.2-dist",
+        "out": "/nix/store/pq350aj4njgjmgylg67ya4dsfg7q4a2j-flox-mcp-server-0.2.2"
+      },
+      "system": "aarch64-darwin",
+      "group": "flox-mcp-server",
       "priority": 5
     },
     {
@@ -604,34 +639,33 @@
       "priority": 5
     },
     {
-      "attr_path": "flox-mcp-server",
+      "attr_path": "openclaw",
       "broken": false,
-      "derivation": "/nix/store/xqxwlh8kh7jl51n2b04bqb5xgcwl2g42-flox-mcp-server-0.2.2.drv",
-      "description": "MCP server for Flox package manager",
-      "install_id": "flox-mcp-server",
+      "derivation": "/nix/store/9wyga3bkdbfqv4wqvh2szff0ryn5s23y-openclaw-2026.6.1.drv",
+      "description": "Self-hosted, open-source AI assistant/agent",
+      "install_id": "openclaw",
       "license": "MIT",
-      "locked_url": "ssh://git@github.com/flox/mcp-server.git?rev=e727f1b0f40c70b0335091e1a876e582abcccb5a",
-      "name": "flox-mcp-server-0.2.2",
-      "pname": "flox-mcp-server",
-      "rev": "e727f1b0f40c70b0335091e1a876e582abcccb5a",
-      "rev_count": 32,
-      "rev_date": "2026-04-20T17:03:53Z",
-      "scrape_date": "2026-06-05T14:32:01.899270Z",
+      "locked_url": "https://github.com/flox/floxenvs?rev=fad67d4f1c9fdc34f46d7d2b00a3e29d16c449e7",
+      "name": "openclaw-2026.6.1",
+      "pname": "openclaw",
+      "rev": "fad67d4f1c9fdc34f46d7d2b00a3e29d16c449e7",
+      "rev_count": 6097,
+      "rev_date": "2026-06-04T02:26:21Z",
+      "scrape_date": "2026-06-05T14:38:00.697187Z",
       "stabilities": [
         "staging",
         "unstable"
       ],
       "unfree": false,
-      "version": "0.2.2",
+      "version": "2026.6.1",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "dist": "/nix/store/6y5c1wg3z3xaf7s8ffbjb0a0l8xqypm8-flox-mcp-server-0.2.2-dist",
-        "out": "/nix/store/pq350aj4njgjmgylg67ya4dsfg7q4a2j-flox-mcp-server-0.2.2"
+        "out": "/nix/store/gxwg26d37mls5jy0477i3kmnpmkphp6g-openclaw-2026.6.1"
       },
       "system": "aarch64-darwin",
-      "group": "flox-mcp-server",
+      "group": "openclaw",
       "priority": 5
     }
   ],
@@ -691,6 +725,10 @@
         "llamacpp-proxy": {
           "pkg-path": "flox-labs/llamacpp-proxy",
           "pkg-group": "llamacpp-proxy"
+        },
+        "openclaw": {
+          "pkg-path": "flox/openclaw",
+          "pkg-group": "openclaw"
         },
         "opencode": {
           "pkg-path": "flox/opencode",
