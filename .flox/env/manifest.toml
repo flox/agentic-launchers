@@ -19,6 +19,7 @@ hermes-agent.pkg-path = "flox/hermes-agent"
 hermes-agent.pkg-group = "hermes-agent"
 llamacpp-proxy.pkg-path = "flox-labs/llamacpp-proxy"
 llamacpp-proxy.pkg-group = "llamacpp-proxy"
+llamacpp-proxy.systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
 bash.pkg-path = "bash"
 jq.pkg-path = "jq"
 gnused.pkg-path = "gnused"
@@ -27,6 +28,7 @@ git.pkg-path = "git"
 gum.pkg-path = "gum"
 flox-mcp-server.pkg-path = "flox/flox-mcp-server"
 flox-mcp-server.pkg-group = "flox-mcp-server"
+flox-mcp-server.systems = ["x86_64-linux", "aarch64-darwin"]
 openclaw.pkg-path = "flox/openclaw"
 openclaw.pkg-group = "openclaw"
 nanocoder.pkg-path = "flox/nanocoder"
@@ -98,8 +100,8 @@ command = '''
 
 [include]
 environments = [
-  { remote = "flox-labs/omlx" },
-#  { remote = "flox-labs/ollama" },
+#  { remote = "flox-labs/omlx" },
+  { remote = "flox-labs/ollama" },
 ]
 
 
