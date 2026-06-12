@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper for codex to use ollama directly (OpenAI-compat endpoint).
+# Data is isolated to $FLOX_ENV_CACHE/codex via CODEX_HOME so ~/.codex
+# is never touched.
+#
+# Usage: launch-codex --model <model> [codex args...]
+#   e.g. launch-codex --model qwen2.5-coder
+#        launch-codex --model qwen2.5-coder -q "explain this codebase"
+
+MODEL=""
+CODEX_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      MODEL="${2:?--model requires a value}"
+      shift 2
+      ;;
+    *)
+      CODEX_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$MODEL" ]]; then
+  echo "Usage: launch-codex --model <model> [codex args...]" >&2
+  exit 1
+fi
+
+source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
+ollama_normalize_host_port
+ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+
+export CODEX_HOME="${FLOX_ENV_CACHE}/codex"
+mkdir -p "$CODEX_HOME"
+
+if [[ ! -f "$CODEX_HOME/auth.json" ]]; then
+  printf '%s' '{"auth_mode":"apikey","OPENAI_API_KEY":"ollama"}' \
+    > "$CODEX_HOME/auth.json"
+fi
+
+exec codex \
+  -c 'model_provider="ollama"' \
+  -c "model=\"${MODEL}\"" \
+  ${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}

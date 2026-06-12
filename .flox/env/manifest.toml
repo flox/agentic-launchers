@@ -17,9 +17,9 @@ deepseek-tui.pkg-group = "deepseek-tui"
 aider-chat.pkg-path = "aider-chat"
 hermes-agent.pkg-path = "flox/hermes-agent"
 hermes-agent.pkg-group = "hermes-agent"
+hermes-agent.priority = 3
 llamacpp-proxy.pkg-path = "flox-labs/llamacpp-proxy"
 llamacpp-proxy.pkg-group = "llamacpp-proxy"
-llamacpp-proxy.systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
 bash.pkg-path = "bash"
 jq.pkg-path = "jq"
 gnused.pkg-path = "gnused"
@@ -33,14 +33,19 @@ openclaw.pkg-path = "flox/openclaw"
 openclaw.pkg-group = "openclaw"
 nanocoder.pkg-path = "flox/nanocoder"
 nanocoder.pkg-group = "nanocoder"
-
+ollama-model-resolver.store-path = "/nix/store/8kxqskxzidwkb41nfvkbq6pi7c44an8r-ollama-model-resolver-0.4.2"
+ollama-model-resolver.systems = ["x86_64-linux"]
+ollama-cuda.pkg-path = "flox/ollama-cuda"
+ollama-cuda.pkg-group = "ollama-cuda"
+ollama-cuda.systems = ["x86_64-linux", "aarch64-linux"]
 
 [vars]
 
 
 [hook]
 on-activate = '''
-  export OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1}"
+  export OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-262144}"  # Default: 4096
+  export OLLAMA_HOST="127.0.0.1"
   export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
   export OPENAI_API_BASE="${OPENAI_API_BASE:-http://127.0.0.1:11434/v1}"
   export OPENAI_API_KEY="${OPENAI_API_KEY:-ollama}"
@@ -65,8 +70,12 @@ command = '''
     echo "llamacpp-proxy not supported on Intel Mac" >&2; exit 1
   fi
   _ollama="${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}"
+  for _i in $(seq 1 30); do
+    curl -sf --connect-timeout 2 --max-time 3 "http://${_ollama}/" >/dev/null 2>&1 && break
+    sleep 1
+  done
   if ! curl -sf --connect-timeout 3 --max-time 5 "http://${_ollama}/" >/dev/null 2>&1; then
-    echo "ollama is not reachable at ${_ollama} — start ollama before this service" >&2; exit 1
+    echo "ollama is not reachable at ${_ollama} after 30s — is it running?" >&2; exit 1
   fi
   model="$(cat "${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model" 2>/dev/null || true)"
   [[ -z "$model" ]] && model="default"
@@ -106,12 +115,10 @@ environments = [
 
 
 [options]
-# Systems that environment is compatible with
-# systems = [
-#   "aarch64-darwin",
-#   "aarch64-linux",
-#   "x86_64-darwin",
-#   "x86_64-linux",
-# ]
+systems = [
+   "aarch64-darwin",
+   "aarch64-linux",
+   "x86_64-linux",
+]
 # Uncomment to disable CUDA detection.
 # cuda-detection = false

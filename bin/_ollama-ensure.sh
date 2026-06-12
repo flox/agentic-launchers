@@ -1,6 +1,17 @@
 # Shared helper — sourced by launch-* wrappers.
-# Ensures a model exists locally in ollama, pulling it if missing.
 
+# Normalize OLLAMA_HOST which may already contain a port (ollama convention).
+# After calling: OLLAMA_HOST is host-only, OLLAMA_PORT is port-only.
+ollama_normalize_host_port() {
+  if [[ "${OLLAMA_HOST:-}" == *:* ]]; then
+    OLLAMA_PORT="${OLLAMA_HOST##*:}"
+    OLLAMA_HOST="${OLLAMA_HOST%:*}"
+  fi
+  OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1}"
+  OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+}
+
+# Ensures a model exists locally in ollama, pulling it if missing.
 ollama_ensure_model() {
   local model="$1" host="$2" port="$3"
   local normalized="$model"

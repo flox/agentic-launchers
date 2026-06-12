@@ -29,10 +29,8 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1}"
-OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-
 source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
+ollama_normalize_host_port
 ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
 
 exec deepseek \

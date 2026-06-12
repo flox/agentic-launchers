@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper for opencode to use ollama directly (OpenAI-compat endpoint).
+# Config is written to $FLOX_ENV_CACHE/opencode via XDG_CONFIG_HOME
+# so ~/.config/opencode is never touched.
+#
+# Usage: launch-opencode --model <model> [opencode args...]
+#   e.g. launch-opencode --model qwen2.5-coder
+
+MODEL=""
+OPENCODE_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model)
+      MODEL="${2:?--model requires a value}"
+      shift 2
+      ;;
+    *)
+      OPENCODE_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$MODEL" ]]; then
+  echo "Usage: launch-opencode --model <model> [opencode args...]" >&2
+  exit 1
+fi
+
+source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
+ollama_normalize_host_port
+ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+
+OPENCODE_DATA_DIR="${FLOX_ENV_CACHE}/opencode"
+mkdir -p "$OPENCODE_DATA_DIR"
+
+_provider="$(jq -n \
+  --arg base "http://${OLLAMA_HOST}:${OLLAMA_PORT}/v1" \
+  --arg id   "$MODEL" \
+  '{
+    "npm":  "@ai-sdk/openai-compatible",
+    "name": "Ollama",
+    "options": { "baseURL": $base, "apiKey": "ollama" },
+    "models": { ($id): { "name": $id, "modalities": { "input": ["text"], "output": ["text"] } } }
+  }')"
+
+_config="$OPENCODE_DATA_DIR/opencode.json"
+trap 'rm -f "${_config}.tmp"' EXIT
+
+_write_fresh() {
+  jq -n \
+    --argjson p "$_provider" \
+    --arg     m "ollama/$MODEL" \
+    '{ "$schema": "https://opencode.ai/config.json", provider: { ollama: $p }, model: $m }' \
+    > "$_config"
+}
+
+if [[ -f "$_config" ]]; then
+  if jq --argjson p "$_provider" \
+        --arg     m "ollama/$MODEL" \
+        '.["$schema"] = "https://opencode.ai/config.json"
+         | .provider.ollama = $p
+         | .model = $m' \
+        "$_config" > "${_config}.tmp" 2>/dev/null; then
+    mv "${_config}.tmp" "$_config"
+  else
+    rm -f "${_config}.tmp"
+    _write_fresh
+  fi
+else
+  _write_fresh
+fi
+
+export XDG_CONFIG_HOME="${FLOX_ENV_CACHE}"
+exec opencode ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}
