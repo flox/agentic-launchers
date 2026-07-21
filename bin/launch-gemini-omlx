@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for gemini-cli to use omlx via llamacpp-proxy.
 # gemini-cli speaks the Gemini API protocol; llamacpp-proxy translates
 # Gemini API <-> OpenAI Chat Completions <-> omlx.
@@ -22,9 +28,21 @@ GEMINI_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       GEMINI_ARGS+=("$1")
@@ -41,14 +59,24 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-source "${BASH_SOURCE[0]%/*}/_proxy-ensure.sh"
-proxy_ensure_model "llamacpp-proxy-omlx" "$MODEL" \
-  "${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_proxy-ensure.sh"
+PROXY_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}")" || exit 1
+PROXY_GEMINI_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}")" || exit 1
+OMLX_CREDENTIAL_ID="$(launcher_profile_key "omlx-api-key-v1" "$OMLX_API_KEY")" || exit 1
+proxy_ensure_model "llamacpp-proxy-omlx" "$OMLX_MODEL_ID" "$PROXY_BASE_URL" \
+  "backend=omlx" \
+  "source_repo=${MODEL}" \
+  "upstream=${OMLX_BASE_URL}" \
+  "openai_listen=${PROXY_BASE_URL}" \
+  "gemini_listen=${PROXY_GEMINI_BASE_URL}" \
+  "credential=${OMLX_CREDENTIAL_ID}" \
+  "protocol=llamacpp-proxy-omlx-v2" || exit 1
 
 export GEMINI_API_KEY="${GEMINI_API_KEY:-llamacpp-local}"
-export GOOGLE_GEMINI_BASE_URL="http://${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}"
+export GOOGLE_GEMINI_BASE_URL="$PROXY_GEMINI_BASE_URL"
 
-exec gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}
+exec gemini -m "$OMLX_MODEL_ID" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}

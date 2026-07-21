@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for crush to use ollama via the llamacpp-proxy-ollama service.
 # crush speaks openai-compat; the persistent proxy translates to ollama.
 # Config is isolated to $FLOX_ENV_CACHE to avoid overwriting ~/.config/crush.
@@ -17,9 +23,21 @@ CRUSH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       CRUSH_ARGS+=("$1")
@@ -33,52 +51,50 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
-ollama_normalize_host_port
-ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
 
-PROXY_LISTEN="${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}"
-if ! curl -sf --connect-timeout 1 --max-time 2 "http://${PROXY_LISTEN}/health" >/dev/null 2>&1; then
-  echo "Error: llamacpp-proxy-ollama service is not running." >&2
-  echo "  Start with: flox activate -s  (or: flox services start llamacpp-proxy-ollama)" >&2
+source "$LAUNCHER_SCRIPT_DIR/_proxy-ensure.sh"
+PROXY_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}")" || exit 1
+PROXY_GEMINI_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}")" || exit 1
+proxy_ensure_model "llamacpp-proxy-ollama" "$MODEL" "$PROXY_BASE_URL" \
+  "backend=ollama" \
+  "upstream=${OLLAMA_BASE_URL}" \
+  "openai_listen=${PROXY_BASE_URL}" \
+  "gemini_listen=${PROXY_GEMINI_BASE_URL}" \
+  "credential=none" \
+  "protocol=llamacpp-proxy-ollama-v2" || exit 1
+
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "crush-ollama" "$MODEL" "$OLLAMA_BASE_URL" "$PROXY_BASE_URL" "llamacpp-local")" || {
+  echo "Error: could not derive crush profile key" >&2
   exit 1
-fi
-
-CRUSH_DATA_DIR="${FLOX_ENV_CACHE}/crush"
-mkdir -p "$CRUSH_DATA_DIR"
-
-MODEL_JSON="${MODEL//\\/\\\\}"
-MODEL_JSON="${MODEL_JSON//\"/\\\"}"
-
-cat > "$CRUSH_DATA_DIR/crush.json" <<EOF
-{
-  "providers": {
-    "llamacpp": {
-      "type": "openai-compat",
-      "base_url": "http://${PROXY_LISTEN}/v1",
-      "api_key": "llamacpp-local",
-      "models": [
-        {
-          "id": "${MODEL_JSON}",
-          "name": "${MODEL_JSON}",
-          "context_window": 65536
-        }
-      ]
-    }
-  },
-  "models": {
-    "large": {
-      "model": "${MODEL_JSON}",
-      "provider": "llamacpp",
-      "max_tokens": 8192
-    },
-    "small": {
-      "model": "${MODEL_JSON}",
-      "provider": "llamacpp",
-      "max_tokens": 4096
-    }
-  }
 }
-EOF
+CRUSH_LEGACY_DIR="${FLOX_ENV_CACHE}/crush"
+CRUSH_DATA_DIR="${FLOX_ENV_CACHE}/crush-profiles/ollama-${PROFILE_KEY}"
+mkdir -p "$CRUSH_LEGACY_DIR" "$CRUSH_DATA_DIR"
+
+_config_json="$(jq -n \
+  --arg base "${PROXY_BASE_URL}/v1" \
+  --arg model "$MODEL" \
+  '{
+    providers: {
+      llamacpp: {
+        type: "openai-compat",
+        base_url: $base,
+        api_key: "llamacpp-local",
+        models: [{id:$model,name:$model,context_window:65536}]
+      }
+    },
+    models: {
+      large: {model:$model,provider:"llamacpp",max_tokens:8192},
+      small: {model:$model,provider:"llamacpp",max_tokens:4096}
+    }
+  }')"
+printf '%s\n' "$_config_json" \
+  | launcher_atomic_write_file "$CRUSH_DATA_DIR/crush.json" 600
+printf '%s\n' "$_config_json" \
+  | launcher_atomic_write_file "$CRUSH_LEGACY_DIR/crush.json" 600
 
 exec crush -D "$CRUSH_DATA_DIR" ${CRUSH_ARGS[@]+"${CRUSH_ARGS[@]}"}

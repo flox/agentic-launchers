@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for openclaw to use ollama via the OpenAI completions API.
 # Config is injected into the 'ollama' openclaw profile (~/.openclaw-ollama/)
 # to avoid touching the user's default profile.
@@ -13,9 +19,21 @@ OPENCLAW_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       OPENCLAW_ARGS+=("$1")
@@ -29,38 +47,35 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
-ollama_normalize_host_port
-ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
 
-MODEL_JSON="${MODEL//\\/\\\\}"
-MODEL_JSON="${MODEL_JSON//\"/\\\"}"
-
-openclaw --profile ollama config patch --stdin <<EOF
-{
-  "models": {
-    "mode": "replace",
-    "providers": {
-      "ollama": {
-        "api": "openai-completions",
-        "baseUrl": "http://${OLLAMA_HOST}:${OLLAMA_PORT}/v1",
-        "auth": "api-key",
-        "apiKey": "ollama",
-        "models": [
-          {
-            "id": "${MODEL_JSON}",
-            "name": "${MODEL_JSON}"
-          }
-        ]
-      }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": "ollama/${MODEL_JSON}"
-    }
-  }
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "openclaw-ollama" "$MODEL" "$OLLAMA_BASE_URL" "ollama")" || {
+  echo "Error: could not derive openclaw profile key" >&2
+  exit 1
 }
-EOF
+OPENCLAW_PROFILE="ollama-${PROFILE_KEY}"
 
-exec openclaw --profile ollama chat ${OPENCLAW_ARGS[@]+"${OPENCLAW_ARGS[@]}"}
+_config_json="$(jq -n \
+  --arg base "${OLLAMA_BASE_URL}/v1" \
+  --arg model "$MODEL" \
+  '{
+    models: {
+      mode: "replace",
+      providers: {
+        ollama: {
+          api: "openai-completions",
+          baseUrl: $base,
+          auth: "api-key",
+          apiKey: "ollama",
+          models: [{id:$model,name:$model}]
+        }
+      }
+    },
+    agents: {defaults: {model:("ollama/" + $model)}}
+  }')"
+printf '%s\n' "$_config_json" | openclaw --profile "$OPENCLAW_PROFILE" config patch --stdin
+
+exec openclaw --profile "$OPENCLAW_PROFILE" chat ${OPENCLAW_ARGS[@]+"${OPENCLAW_ARGS[@]}"}

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for crush to use omlx via the Anthropic Messages API.
 # omlx natively serves /v1/messages, so no proxy is needed.
 # Config is isolated to $FLOX_ENV_CACHE/crush-omlx to avoid touching
@@ -14,9 +20,21 @@ CRUSH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       CRUSH_ARGS+=("$1")
@@ -33,52 +51,51 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-CRUSH_DATA_DIR="${FLOX_ENV_CACHE}/crush-omlx"
-mkdir -p "$CRUSH_DATA_DIR"
-
-# Escape model name for JSON
-MODEL_JSON="${MODEL//\\/\\\\}"
-MODEL_JSON="${MODEL_JSON//\"/\\\"}"
-
-cat > "$CRUSH_DATA_DIR/crush.json" <<EOF
-{
-  "providers": {
-    "omlx": {
-      "type": "anthropic",
-      "base_url": "http://${OMLX_HOST}:${OMLX_PORT}",
-      "api_key": "${OMLX_API_KEY}",
-      "models": [
-        {
-          "id": "${MODEL_JSON}",
-          "name": "${MODEL_JSON}",
-          "cost_per_1m_in": 0,
-          "cost_per_1m_out": 0,
-          "cost_per_1m_in_cached": 0,
-          "cost_per_1m_out_cached": 0,
-          "context_window": 32768,
-          "default_max_tokens": 8192,
-          "can_reason": false,
-          "supports_attachments": false
-        }
-      ]
-    }
-  },
-  "models": {
-    "large": {
-      "model": "${MODEL_JSON}",
-      "provider": "omlx",
-      "max_tokens": 8192
-    },
-    "small": {
-      "model": "${MODEL_JSON}",
-      "provider": "omlx",
-      "max_tokens": 4096
-    }
-  }
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "crush-omlx" "$MODEL" "$OMLX_MODEL_ID" "$OMLX_BASE_URL" "$OMLX_API_KEY" "anthropic")" || {
+  echo "Error: could not derive crush profile key" >&2
+  exit 1
 }
-EOF
+CRUSH_LEGACY_DIR="${FLOX_ENV_CACHE}/crush-omlx"
+CRUSH_DATA_DIR="${FLOX_ENV_CACHE}/crush-profiles/omlx-${PROFILE_KEY}"
+mkdir -p "$CRUSH_LEGACY_DIR" "$CRUSH_DATA_DIR"
+
+_config_json="$(jq -n \
+  --arg base "${OMLX_BASE_URL}" \
+  --arg key "$OMLX_API_KEY" \
+  --arg model "$OMLX_MODEL_ID" \
+  '{
+    providers: {
+      omlx: {
+        type: "anthropic",
+        base_url: $base,
+        api_key: $key,
+        models: [{
+          id:$model,
+          name:$model,
+          cost_per_1m_in:0,
+          cost_per_1m_out:0,
+          cost_per_1m_in_cached:0,
+          cost_per_1m_out_cached:0,
+          context_window:32768,
+          default_max_tokens:8192,
+          can_reason:false,
+          supports_attachments:false
+        }]
+      }
+    },
+    models: {
+      large: {model:$model,provider:"omlx",max_tokens:8192},
+      small: {model:$model,provider:"omlx",max_tokens:4096}
+    }
+  }')"
+printf '%s\n' "$_config_json" \
+  | launcher_atomic_write_file "$CRUSH_DATA_DIR/crush.json" 600
+printf '%s\n' "$_config_json" \
+  | launcher_atomic_write_file "$CRUSH_LEGACY_DIR/crush.json" 600
 
 exec crush -D "$CRUSH_DATA_DIR" ${CRUSH_ARGS[@]+"${CRUSH_ARGS[@]}"}

@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+case "${BASH_SOURCE[0]}" in
+  */*) _script_parent="${BASH_SOURCE[0]%/*}" ;;
+  *)   _script_parent="." ;;
+esac
+SCRIPT_DIR="$(cd -- "$_script_parent" && pwd -P)"
+unset _script_parent
 
-# Find the real ollama binary, skipping this wrapper.
+# Find the real ollama binary, skipping this wrapper and any symlink to it.
 _real_ollama() {
-  local self_dir
-  self_dir="$(cd "$SCRIPT_DIR" && pwd)"
-  IFS=: read -ra _path_dirs <<< "$PATH"
-  for dir in "${_path_dirs[@]}"; do
-    if [[ -x "$dir/ollama" ]] && [[ "$(cd "$dir" && pwd)" != "$self_dir" ]]; then
-      echo "$dir/ollama"
+  local remaining="${PATH:-}:" dir candidate
+  while [[ "$remaining" == *:* ]]; do
+    dir="${remaining%%:*}"
+    remaining="${remaining#*:}"
+    [[ -n "$dir" ]] || dir="."
+    candidate="${dir%/}/ollama"
+    if [[ -x "$candidate" && ! -d "$candidate" && ! "$candidate" -ef "${BASH_SOURCE[0]}" ]]; then
+      printf '%s\n' "$candidate"
       return 0
     fi
   done
@@ -18,36 +25,60 @@ _real_ollama() {
   return 1
 }
 
-# Dispatch resolver commands before checking for launch
+_exec_real_ollama() {
+  local real
+  real="$(_real_ollama)" || return $?
+  exec "$real" "$@"
+}
+
+_ollama_launch_usage() {
+  echo "Usage: ollama launch <tool> [--model <model>] [tool args...]" >&2
+  echo "Tools: aider, codex, crush, deepseek, gemini, hermes, nanocoder, openclaw, opencode" >&2
+}
+
+# Dispatch resolver commands before checking for launch.
 case "${1:-}" in
-  search)       shift 1; exec ollama-model-resolver search "$@" ;;
-  resolve)      shift 1; exec ollama-model-resolver resolve "$@" ;;
-  resolver-info) shift 1; exec ollama-model-resolver info "$@" ;;
+  search)        shift; exec ollama-model-resolver search "$@" ;;
+  resolve)       shift; exec ollama-model-resolver resolve "$@" ;;
+  resolver-info) shift; exec ollama-model-resolver info "$@" ;;
 esac
 
-# Pass through if not "ollama launch ..."
+# Pass through if not "ollama launch ...".
 if [[ "${1:-}" != "launch" ]]; then
-  exec "$(_real_ollama)" "$@"
+  _exec_real_ollama "$@"
 fi
 
-TOOL="${2:-}"
+if [[ $# -lt 2 || -z "${2:-}" ]]; then
+  _ollama_launch_usage
+  exit 2
+fi
 
-# For launch subcommands, resolve any --model value ending in ?
+TOOL="$2"
 shift 2
+
+# For launch subcommands, resolve any --model/-m value ending in '?'.
 RESOLVED_ARGS=()
-_resolve_next=false
+_resolve_next=""
 for arg in "$@"; do
-  if $_resolve_next; then
-    _resolve_next=false
+  if [[ -n "$_resolve_next" ]]; then
+    if [[ "$arg" == -* ]]; then
+      echo "Error: ${_resolve_next} requires a model value; got '${arg}'" >&2
+      exit 2
+    fi
     if [[ "$arg" == *'?' ]]; then
       arg="$(ollama-model-resolver resolve "$arg" --quiet)" || exit 1
     fi
     RESOLVED_ARGS+=("$arg")
+    _resolve_next=""
   elif [[ "$arg" == "--model" || "$arg" == "-m" ]]; then
     RESOLVED_ARGS+=("$arg")
-    _resolve_next=true
+    _resolve_next="$arg"
   elif [[ "$arg" == --model=* ]]; then
     _val="${arg#--model=}"
+    if [[ -z "$_val" ]]; then
+      echo "Error: --model requires a non-empty value" >&2
+      exit 2
+    fi
     if [[ "$_val" == *'?' ]]; then
       _val="$(ollama-model-resolver resolve "$_val" --quiet)" || exit 1
     fi
@@ -56,8 +87,12 @@ for arg in "$@"; do
     RESOLVED_ARGS+=("$arg")
   fi
 done
+if [[ -n "$_resolve_next" ]]; then
+  echo "Error: ${_resolve_next} requires a model value" >&2
+  exit 2
+fi
 
-# Dispatch to launch wrappers with resolved args
+# Dispatch to launch wrappers with resolved args.
 case "$TOOL" in
   gemini)              exec "$SCRIPT_DIR/launch-gemini" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
   codex)               exec "$SCRIPT_DIR/launch-codex" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
@@ -65,5 +100,8 @@ case "$TOOL" in
   deepseek)            exec "$SCRIPT_DIR/launch-deepseek" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
   aider)               exec "$SCRIPT_DIR/launch-aider" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
   nanocoder)           exec "$SCRIPT_DIR/launch-nanocoder" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
-  *)         exec "$(_real_ollama)" launch "$TOOL" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
+  openclaw)            exec "$SCRIPT_DIR/launch-openclaw" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
+  opencode)            exec "$SCRIPT_DIR/launch-opencode" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
+  hermes|hermes-agent) exec "$SCRIPT_DIR/launch-hermes" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
+  *)                   _exec_real_ollama launch "$TOOL" ${RESOLVED_ARGS[@]+"${RESOLVED_ARGS[@]}"} ;;
 esac

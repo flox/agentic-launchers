@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for opencode to use ollama directly (OpenAI-compat endpoint).
 # Config is written to $FLOX_ENV_CACHE/opencode via XDG_CONFIG_HOME
 # so ~/.config/opencode is never touched.
@@ -13,9 +19,21 @@ OPENCODE_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       OPENCODE_ARGS+=("$1")
@@ -29,15 +47,23 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
-ollama_normalize_host_port
-ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
 
-OPENCODE_DATA_DIR="${FLOX_ENV_CACHE}/opencode"
-mkdir -p "$OPENCODE_DATA_DIR"
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "opencode-ollama" "$MODEL" "$OLLAMA_BASE_URL" "ollama")" || {
+  echo "Error: could not derive opencode profile key" >&2
+  exit 1
+}
+OPENCODE_LEGACY_DIR="${FLOX_ENV_CACHE}/opencode"
+OPENCODE_LEGACY_CONFIG="$OPENCODE_LEGACY_DIR/opencode.json"
+OPENCODE_PROFILE_ROOT="${FLOX_ENV_CACHE}/opencode-profiles/ollama-${PROFILE_KEY}"
+OPENCODE_DATA_DIR="$OPENCODE_PROFILE_ROOT/opencode"
+mkdir -p "$OPENCODE_LEGACY_DIR" "$OPENCODE_DATA_DIR"
 
 _provider="$(jq -n \
-  --arg base "http://${OLLAMA_HOST}:${OLLAMA_PORT}/v1" \
+  --arg base "${OLLAMA_BASE_URL}/v1" \
   --arg id   "$MODEL" \
   '{
     "npm":  "@ai-sdk/openai-compatible",
@@ -47,31 +73,34 @@ _provider="$(jq -n \
   }')"
 
 _config="$OPENCODE_DATA_DIR/opencode.json"
-trap 'rm -f "${_config}.tmp"' EXIT
-
-_write_fresh() {
-  jq -n \
-    --argjson p "$_provider" \
-    --arg     m "ollama/$MODEL" \
-    '{ "$schema": "https://opencode.ai/config.json", provider: { ollama: $p }, model: $m }' \
-    > "$_config"
-}
-
-if [[ -f "$_config" ]]; then
-  if jq --argjson p "$_provider" \
-        --arg     m "ollama/$MODEL" \
-        '.["$schema"] = "https://opencode.ai/config.json"
-         | .provider.ollama = $p
-         | .model = $m' \
-        "$_config" > "${_config}.tmp" 2>/dev/null; then
-    mv "${_config}.tmp" "$_config"
-  else
-    rm -f "${_config}.tmp"
-    _write_fresh
-  fi
-else
-  _write_fresh
+_source_config=""
+if [[ -e "$_config" || -L "$_config" ]]; then
+  _launcher_validate_regular_target "$_config" || exit 1
+  _source_config="$_config"
+elif [[ -e "$OPENCODE_LEGACY_CONFIG" || -L "$OPENCODE_LEGACY_CONFIG" ]]; then
+  _launcher_validate_regular_target "$OPENCODE_LEGACY_CONFIG" || exit 1
+  _source_config="$OPENCODE_LEGACY_CONFIG"
 fi
 
-export XDG_CONFIG_HOME="${FLOX_ENV_CACHE}"
+_config_json=""
+if [[ -n "$_source_config" ]] && _config_json="$(jq \
+      --argjson p "$_provider" \
+      --arg m "ollama/$MODEL" \
+      '.["$schema"] = "https://opencode.ai/config.json"
+       | .provider.ollama = $p
+       | .model = $m' \
+      "$_source_config" 2>/dev/null)"; then
+  :
+else
+  _config_json="$(jq -n \
+    --argjson p "$_provider" \
+    --arg m "ollama/$MODEL" \
+    '{ "$schema": "https://opencode.ai/config.json", provider: { ollama: $p }, model: $m }')"
+fi
+
+printf '%s\n' "$_config_json" | launcher_atomic_write_file "$_config" 600
+# Keep the historical cache path as a human-editable seed for future profiles.
+printf '%s\n' "$_config_json" | launcher_atomic_write_file "$OPENCODE_LEGACY_CONFIG" 600
+
+export XDG_CONFIG_HOME="$OPENCODE_PROFILE_ROOT"
 exec opencode ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}

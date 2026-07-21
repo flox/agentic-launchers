@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for gemini-cli to use ollama via llamacpp-proxy.
 # gemini-cli speaks the Gemini API protocol; llamacpp-proxy translates
 # Gemini API <-> OpenAI Chat Completions <-> ollama.
@@ -17,9 +23,21 @@ GEMINI_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       GEMINI_ARGS+=("$1")
@@ -33,15 +51,22 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
-ollama_normalize_host_port
-ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
 
-source "${BASH_SOURCE[0]%/*}/_proxy-ensure.sh"
-proxy_ensure_model "llamacpp-proxy-ollama" "$MODEL" \
-  "${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_proxy-ensure.sh"
+PROXY_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}")" || exit 1
+PROXY_GEMINI_BASE_URL="$(_proxy_base_url "${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}")" || exit 1
+proxy_ensure_model "llamacpp-proxy-ollama" "$MODEL" "$PROXY_BASE_URL" \
+  "backend=ollama" \
+  "upstream=${OLLAMA_BASE_URL}" \
+  "openai_listen=${PROXY_BASE_URL}" \
+  "gemini_listen=${PROXY_GEMINI_BASE_URL}" \
+  "credential=none" \
+  "protocol=llamacpp-proxy-ollama-v2" || exit 1
 
 export GEMINI_API_KEY="${GEMINI_API_KEY:-llamacpp-local}"
-export GOOGLE_GEMINI_BASE_URL="http://${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}"
+export GOOGLE_GEMINI_BASE_URL="$PROXY_GEMINI_BASE_URL"
 
 exec gemini -m "$MODEL" ${GEMINI_ARGS[@]+"${GEMINI_ARGS[@]}"}

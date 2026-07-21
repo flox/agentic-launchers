@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for hermes-agent to use omlx.
 # hermes-agent uses OpenAI-compat endpoints; no proxy needed.
 #
@@ -12,9 +18,21 @@ HERMES_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       HERMES_ARGS+=("$1")
@@ -31,10 +49,11 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-export OPENAI_BASE_URL="http://${OMLX_HOST}:${OMLX_PORT}/v1"
+export OPENAI_BASE_URL="${OMLX_BASE_URL}/v1"
 export OPENAI_API_KEY="$OMLX_API_KEY"
 
-exec hermes-agent --model "$MODEL" ${HERMES_ARGS[@]+"${HERMES_ARGS[@]}"}
+exec hermes-agent --model "$OMLX_MODEL_ID" ${HERMES_ARGS[@]+"${HERMES_ARGS[@]}"}

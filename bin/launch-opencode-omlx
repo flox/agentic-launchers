@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for opencode to use omlx.
 # omlx serves the OpenAI-compat endpoint; opencode connects via
 # @ai-sdk/openai-compatible. Config is written to $FLOX_ENV_CACHE/opencode
@@ -14,9 +20,21 @@ OPENCODE_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       OPENCODE_ARGS+=("$1")
@@ -33,19 +51,25 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-OPENCODE_DATA_DIR="${FLOX_ENV_CACHE}/opencode"
-mkdir -p "$OPENCODE_DATA_DIR"
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "opencode-omlx" "$MODEL" "$OMLX_MODEL_ID" "$OMLX_BASE_URL" "$OMLX_API_KEY" "openai-compatible")" || {
+  echo "Error: could not derive opencode profile key" >&2
+  exit 1
+}
+OPENCODE_LEGACY_DIR="${FLOX_ENV_CACHE}/opencode"
+OPENCODE_LEGACY_CONFIG="$OPENCODE_LEGACY_DIR/opencode.json"
+OPENCODE_PROFILE_ROOT="${FLOX_ENV_CACHE}/opencode-profiles/omlx-${PROFILE_KEY}"
+OPENCODE_DATA_DIR="$OPENCODE_PROFILE_ROOT/opencode"
+mkdir -p "$OPENCODE_LEGACY_DIR" "$OPENCODE_DATA_DIR"
 
-# Build the omlx provider block and target model as jq args so they can be
-# merged into an existing config, preserving user-added settings (MCP servers,
-# keybinds, etc.). On first run the config is created from scratch.
 _provider="$(jq -n \
-  --arg base "http://${OMLX_HOST}:${OMLX_PORT}/v1" \
+  --arg base "${OMLX_BASE_URL}/v1" \
   --arg key  "$OMLX_API_KEY" \
-  --arg id   "$MODEL" \
+  --arg id   "$OMLX_MODEL_ID" \
   '{
     "npm":  "@ai-sdk/openai-compatible",
     "name": "oMLX",
@@ -54,32 +78,33 @@ _provider="$(jq -n \
   }')"
 
 _config="$OPENCODE_DATA_DIR/opencode.json"
-trap 'rm -f "${_config}.tmp"' EXIT
-
-_write_fresh() {
-  jq -n \
-    --argjson p "$_provider" \
-    --arg     m "omlx/$MODEL" \
-    '{ "$schema": "https://opencode.ai/config.json", provider: { omlx: $p }, model: $m }' \
-    > "$_config"
-}
-
-if [[ -f "$_config" ]]; then
-  if jq --argjson p "$_provider" \
-        --arg     m "omlx/$MODEL" \
-        '.["$schema"] = "https://opencode.ai/config.json"
-         | .provider.omlx = $p
-         | .model = $m' \
-        "$_config" > "${_config}.tmp" 2>/dev/null; then
-    mv "${_config}.tmp" "$_config"
-  else
-    # Existing config is malformed — recreate from scratch
-    rm -f "${_config}.tmp"
-    _write_fresh
-  fi
-else
-  _write_fresh
+_source_config=""
+if [[ -e "$_config" || -L "$_config" ]]; then
+  _launcher_validate_regular_target "$_config" || exit 1
+  _source_config="$_config"
+elif [[ -e "$OPENCODE_LEGACY_CONFIG" || -L "$OPENCODE_LEGACY_CONFIG" ]]; then
+  _launcher_validate_regular_target "$OPENCODE_LEGACY_CONFIG" || exit 1
+  _source_config="$OPENCODE_LEGACY_CONFIG"
 fi
 
-export XDG_CONFIG_HOME="${FLOX_ENV_CACHE}"
+_config_json=""
+if [[ -n "$_source_config" ]] && _config_json="$(jq \
+      --argjson p "$_provider" \
+      --arg m "omlx/$OMLX_MODEL_ID" \
+      '.["$schema"] = "https://opencode.ai/config.json"
+       | .provider.omlx = $p
+       | .model = $m' \
+      "$_source_config" 2>/dev/null)"; then
+  :
+else
+  _config_json="$(jq -n \
+    --argjson p "$_provider" \
+    --arg m "omlx/$OMLX_MODEL_ID" \
+    '{ "$schema": "https://opencode.ai/config.json", provider: { omlx: $p }, model: $m }')"
+fi
+
+printf '%s\n' "$_config_json" | launcher_atomic_write_file "$_config" 600
+printf '%s\n' "$_config_json" | launcher_atomic_write_file "$OPENCODE_LEGACY_CONFIG" 600
+
+export XDG_CONFIG_HOME="$OPENCODE_PROFILE_ROOT"
 exec opencode ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for openclaw to use omlx via the OpenAI completions API.
 # omlx natively serves /v1/chat/completions, so no proxy is needed.
 # Config is injected into the 'omlx' openclaw profile (~/.openclaw-omlx/)
@@ -14,9 +20,21 @@ OPENCLAW_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       OPENCLAW_ARGS+=("$1")
@@ -33,48 +51,37 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
-# Escape values for JSON interpolation
-KEY_JSON="${OMLX_API_KEY//\\/\\\\}"
-KEY_JSON="${KEY_JSON//\"/\\\"}"
-# omlx strips the org prefix in /v1/models listings; use the short name
-# so agents.defaults.model resolves correctly against the provider catalog.
-SHORT_MODEL="${MODEL##*/}"
-SHORT_JSON="${SHORT_MODEL//\\/\\\\}"
-SHORT_JSON="${SHORT_JSON//\"/\\\"}"
-
-# Inject provider + default model into the isolated 'omlx' profile.
-# config patch merges recursively: settings already in ~/.openclaw-omlx/
-# are preserved; only models.providers.omlx and agents.defaults.model are
-# updated. mode=replace tells openclaw to use only explicitly configured
-# providers (avoids falling back to cloud providers).
-openclaw --profile omlx config patch --stdin <<EOF
-{
-  "models": {
-    "mode": "replace",
-    "providers": {
-      "omlx": {
-        "api": "openai-completions",
-        "baseUrl": "http://${OMLX_HOST}:${OMLX_PORT}/v1",
-        "auth": "api-key",
-        "apiKey": "${KEY_JSON}",
-        "models": [
-          {
-            "id": "${SHORT_JSON}",
-            "name": "${SHORT_JSON}"
-          }
-        ]
-      }
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": "omlx/${SHORT_JSON}"
-    }
-  }
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+PROFILE_KEY="$(launcher_profile_key "openclaw-omlx" "$MODEL" "$OMLX_MODEL_ID" "$OMLX_BASE_URL" "$OMLX_API_KEY" "openai-completions")" || {
+  echo "Error: could not derive openclaw profile key" >&2
+  exit 1
 }
-EOF
+OPENCLAW_PROFILE="omlx-${PROFILE_KEY}"
 
-exec openclaw --profile omlx chat ${OPENCLAW_ARGS[@]+"${OPENCLAW_ARGS[@]}"}
+# OMLX_MODEL_ID is the provenance-verified server-visible catalog identity.
+_config_json="$(jq -n \
+  --arg base "${OMLX_BASE_URL}/v1" \
+  --arg key "$OMLX_API_KEY" \
+  --arg model "$OMLX_MODEL_ID" \
+  '{
+    models: {
+      mode: "replace",
+      providers: {
+        omlx: {
+          api: "openai-completions",
+          baseUrl: $base,
+          auth: "api-key",
+          apiKey: $key,
+          models: [{id:$model,name:$model}]
+        }
+      }
+    },
+    agents: {defaults: {model:("omlx/" + $model)}}
+  }')"
+printf '%s\n' "$_config_json" | openclaw --profile "$OPENCLAW_PROFILE" config patch --stdin
+
+exec openclaw --profile "$OPENCLAW_PROFILE" chat ${OPENCLAW_ARGS[@]+"${OPENCLAW_ARGS[@]}"}

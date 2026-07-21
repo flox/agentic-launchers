@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for deepseek-tui to use ollama.
 # deepseek-tui has native --provider ollama support.
 #
@@ -13,9 +19,21 @@ DEEPSEEK_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       DEEPSEEK_ARGS+=("$1")
@@ -29,12 +47,12 @@ if [[ -z "$MODEL" ]]; then
   exit 1
 fi
 
-source "${BASH_SOURCE[0]%/*}/_ollama-ensure.sh"
-ollama_normalize_host_port
-ollama_ensure_model "$MODEL" "$OLLAMA_HOST" "$OLLAMA_PORT" || exit 1
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
 
 exec deepseek \
   --provider ollama \
-  --base-url "http://${OLLAMA_HOST}:${OLLAMA_PORT}" \
+  --base-url "${OLLAMA_BASE_URL}" \
   --model "$MODEL" \
   ${DEEPSEEK_ARGS[@]+"${DEEPSEEK_ARGS[@]}"}

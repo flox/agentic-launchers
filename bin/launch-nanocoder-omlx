@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for nanocoder to use omlx via the OpenAI-compatible API.
 # Provider config is injected via NANOCODER_PROVIDERS (highest priority over
 # project and global configs). Config is isolated to $FLOX_ENV_CACHE/nanocoder-omlx
@@ -14,9 +20,21 @@ NANOCODER_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       NANOCODER_ARGS+=("$1")
@@ -33,11 +51,9 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
-
-# omlx strips the org prefix in /v1/models listings
-SHORT_MODEL="${MODEL##*/}"
 
 NANOCODER_CONFIG_DIR="${FLOX_ENV_CACHE}/nanocoder-omlx"
 mkdir -p "$NANOCODER_CONFIG_DIR"
@@ -45,11 +61,11 @@ mkdir -p "$NANOCODER_CONFIG_DIR"
 # Build provider config JSON via jq — handles all escaping automatically.
 # NANOCODER_PROVIDERS takes highest priority over project and global configs.
 NANOCODER_PROVIDERS="$(jq -cn \
-  --arg baseUrl "http://${OMLX_HOST}:${OMLX_PORT}/v1" \
+  --arg baseUrl "${OMLX_BASE_URL}/v1" \
   --arg apiKey  "$OMLX_API_KEY" \
-  --arg model   "$SHORT_MODEL" \
+  --arg model   "$OMLX_MODEL_ID" \
   '[{"name":"omlx","baseUrl":$baseUrl,"apiKey":$apiKey,"models":[$model],"sdkProvider":"openai-compatible"}]')"
 
 export NANOCODER_CONFIG_DIR NANOCODER_PROVIDERS
 
-exec nanocoder --provider omlx --model "$SHORT_MODEL" ${NANOCODER_ARGS[@]+"${NANOCODER_ARGS[@]}"}
+exec nanocoder --provider omlx --model "$OMLX_MODEL_ID" ${NANOCODER_ARGS[@]+"${NANOCODER_ARGS[@]}"}

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
 # Wrapper for codex to use omlx directly (OpenAI-compat endpoint).
 # Data is isolated to $FLOX_ENV_CACHE/codex via CODEX_HOME so ~/.codex
 # is never touched.
@@ -17,9 +23,21 @@ CODEX_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model)
-      MODEL="${2:?--model requires a value}"
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
       shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
       ;;
     *)
       CODEX_ARGS+=("$1")
@@ -36,7 +54,8 @@ fi
 OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
 OMLX_PORT="${OMLX_PORT:-8000}"
 
-source "${BASH_SOURCE[0]%/*}/_omlx-ensure.sh"
+source "$LAUNCHER_SCRIPT_DIR/_omlx-ensure.sh"
+OMLX_BASE_URL="$(_omlx_base_url "$OMLX_HOST" "$OMLX_PORT")" || exit 1
 omlx_ensure_model "$MODEL" "$OMLX_HOST" "$OMLX_PORT" || exit 1
 
 export CODEX_HOME="${FLOX_ENV_CACHE}/codex"
@@ -45,18 +64,16 @@ mkdir -p "$CODEX_HOME"
 # Write auth.json once — codex requires apikey auth mode to be set.
 # The OPENAI_API_KEY value is a dummy; the omlx provider uses OMLX_API_KEY
 # via env_key and ignores it.
-if [[ ! -f "$CODEX_HOME/auth.json" ]]; then
-  printf '%s' '{"auth_mode":"apikey","OPENAI_API_KEY":"lm-studio"}' \
-    > "$CODEX_HOME/auth.json"
-fi
+source "$LAUNCHER_SCRIPT_DIR/_launcher-common.sh"
+printf '%s' '{"auth_mode":"apikey","OPENAI_API_KEY":"lm-studio"}' \
+  | launcher_write_file_if_absent "$CODEX_HOME/auth.json" 600
 
-# omlx strips org prefix in /v1/models — use short name for model selection
-SHORT_MODEL="${MODEL##*/}"
-
+# OMLX_MODEL_ID is exported by omlx_ensure_model only after the requested
+# repository has been proven against the authenticated admin inventory.
 exec codex \
   -c 'model_provider="omlx"' \
-  -c "model=\"${SHORT_MODEL}\"" \
+  -c "model=\"${OMLX_MODEL_ID}\"" \
   -c 'model_providers.omlx.name="oMLX"' \
-  -c "model_providers.omlx.base_url=\"http://${OMLX_HOST}:${OMLX_PORT}/v1\"" \
+  -c "model_providers.omlx.base_url=\"${OMLX_BASE_URL}/v1\"" \
   -c 'model_providers.omlx.env_key="OMLX_API_KEY"' \
   ${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}
