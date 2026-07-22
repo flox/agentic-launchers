@@ -1,4 +1,11 @@
-{ stdenv, lib }:
+{ stdenv, lib, callPackage }:
+
+let
+  # Built as a scoped intermediate so consumers get one artifact. The helper
+  # is a tight implementation detail of the launcher shell layer — nothing
+  # else consumes it — so it ships inside the same $out/bin.
+  launcher-lock-helper = callPackage ./launcher-lock-helper.nix { };
+in
 
 stdenv.mkDerivation {
   pname = "agentic-launchers";
@@ -20,7 +27,8 @@ stdenv.mkDerivation {
     mkdir -p "$out/bin" "$out/etc"
     cp -a bin/. "$out/bin/"
     cp -a etc/. "$out/etc/"
-    chmod 755 "$out/bin/launch" "$out/bin"/launch-*
+    cp "${launcher-lock-helper}/bin/_launcher-lock-helper" "$out/bin/"
+    chmod 755 "$out/bin/launch" "$out/bin"/launch-* "$out/bin/_launcher-lock-helper"
     runHook postInstall
   '';
 

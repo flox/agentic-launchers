@@ -9,9 +9,8 @@ The **build environment** for the `agentic-launchers` Flox package. Ships:
 - A `bin/launch` dispatcher and a set of `launch-<tool>[-omlx]` scripts that wrap ~10 AI coding CLIs (aider, claude, codex, crush, deepseek, gemini, hermes, nanocoder, openclaw, opencode) and point them at a local LLM server.
 - A Go-based `launcher-lock-helper` (`native/launcher-lock-helper/`) that arbitrates concurrent launcher runs via `flock(2)`.
 
-Two Flox packages built via Nix expressions in `.flox/pkgs/`:
-- `agentic-launchers` — the shell layer
-- `launcher-lock-helper` — the Go helper
+One top-level Flox package built via a Nix expression in `.flox/pkgs/`:
+- `agentic-launchers` — the shell layer plus the bundled `_launcher-lock-helper` binary (built as a scoped intermediate from `launcher-lock-helper.nix` and copied into the same `$out/bin`)
 
 The **runtime environment** — where these packages are consumed — lives at `~/dev/agentic-playground/` (a `flox init` env that pins both packages via `store-path` for local testing before publish). This repo is not intended to be activated for launcher use; only for launcher development.
 
@@ -68,9 +67,9 @@ Protocol mapping (why some tools need llamacpp-proxy and others don't):
 
 ## Nix packaging notes
 
-`.flox/pkgs/agentic-launchers.nix` — `stdenv.mkDerivation`, `src = lib.fileset.toSource { root = ../..; fileset = unions [ ../../bin ../../etc ]; }`, `dontPatchShebangs = true` (runtime PATH resolves `bash`/`curl`/`jq`). Installs `bin/*` and `etc/agentic-bootstrap.sh`. Chmod 755 only on `launch` and `launch-*`.
+`.flox/pkgs/agentic-launchers.nix` — `stdenv.mkDerivation`, `src = lib.fileset.toSource { root = ../..; fileset = unions [ ../../bin ../../etc ]; }`, `dontPatchShebangs = true` (runtime PATH resolves `bash`/`curl`/`jq`). Installs `bin/*` and `etc/agentic-bootstrap.sh`. Also builds `launcher-lock-helper.nix` via `callPackage` and copies its `_launcher-lock-helper` binary into `$out/bin/`, so consumers install one package and get both binaries. Chmod 755 on `launch`, `launch-*`, and `_launcher-lock-helper`.
 
-`.flox/pkgs/launcher-lock-helper.nix` — `buildGoModule`, `vendorHash = null` (stdlib only), renames output binary to `_launcher-lock-helper` in `postInstall`.
+`.flox/pkgs/launcher-lock-helper.nix` — `buildGoModule`, `vendorHash = null` (stdlib only), renames output binary to `_launcher-lock-helper` in `postInstall`. Kept as a scoped intermediate; only `agentic-launchers` is exposed as a consumer-facing build.
 
 `etc/agentic-bootstrap.sh` — sourced by the runtime env's `[hook] on-activate`. Sets `OLLAMA_*` / `OMLX_*` / `LLAMACPP_PROXY_*` env vars with defaults. `OLLAMA_CONTEXT_LENGTH` defaults to `32768` (fits mainstream coding models). The build env's own manifest doesn't source this file — it exists only for consumers.
 

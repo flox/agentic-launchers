@@ -6,12 +6,11 @@ Source, Nix expressions, and tests for the `agentic-launchers` Flox package.
 
 ## What gets built
 
-Two Flox packages, defined by Nix expressions in `.flox/pkgs/`:
+One top-level Flox package, defined by a Nix expression in `.flox/pkgs/agentic-launchers.nix`:
 
-- **`agentic-launchers`** — the shell wrappers (`ollama`, `omlx`, `launch-*`, shared helpers, `etc/agentic-bootstrap.sh`). `stdenv.mkDerivation`, no shebang patching.
-- **`launcher-lock-helper`** — the `flock(2)`-based Go binary that arbitrates concurrent launcher runs. `buildGoModule`, stdlib-only.
+- **`agentic-launchers`** — ships `launch`, the per-tool `launch-*` scripts, shared helpers, `etc/agentic-bootstrap.sh`, and the bundled `_launcher-lock-helper` binary in a single `$out/bin`.
 
-Together they replace the per-arch precompiled binaries the earlier hardening pass shipped.
+The lock helper is built as a scoped intermediate (`launcher-lock-helper.nix`, `buildGoModule`, stdlib-only) and copied into the same output — it's an implementation detail of the launcher shell layer, not a separate consumable. `flox build launcher-lock-helper` still works if you want to check it in isolation, but consumers install only `agentic-launchers`.
 
 ## Layout
 
@@ -35,15 +34,14 @@ flox pull --copy -d /tmp/scratch flox/agentic-launchers
 # sync in-tree edits to /tmp/scratch/ (bin/, etc/, native/, .flox/pkgs/)
 cd /tmp/scratch
 git init -q && git add -A && git commit -qm dev
-flox build launcher-lock-helper   # produces result-launcher-lock-helper/bin/_launcher-lock-helper
 flox build agentic-launchers      # produces result-agentic-launchers/{bin,etc}/
+                                  # (builds launcher-lock-helper as an intermediate)
 ```
 
-Wire the freshly-built store paths into the runtime env's manifest as:
+Wire the freshly-built store path into the runtime env's manifest:
 
 ```toml
-launcher-lock-helper.store-path = "/nix/store/…-launcher-lock-helper-0.1.0"
-agentic-launchers.store-path    = "/nix/store/…-agentic-launchers-0.1.0"
+agentic-launchers.store-path = "/nix/store/…-agentic-launchers-0.1.0"
 ```
 
 Then `flox activate` in the runtime env and smoke-test `launch <tool>` end-to-end.
@@ -53,8 +51,8 @@ Then `flox activate` in the runtime env and smoke-test `launch <tool>` end-to-en
 All three suites are mocked — no live Ollama/omlx/CLI qualification:
 
 ```
-export LAUNCHER_LOCK_HELPER=/tmp/scratch/result-launcher-lock-helper/bin/_launcher-lock-helper
-bash tests/test-launchers.sh          # 50 checks
+export LAUNCHER_LOCK_HELPER=/tmp/scratch/result-agentic-launchers/bin/_launcher-lock-helper
+bash tests/test-launchers.sh          # 55 checks
 bash tests/test-proxy-record-auth.sh  #  7 checks
 bash tests/test-lock-crash.sh         #  5 checks
 ```
@@ -67,7 +65,6 @@ Not automated. When ready:
 
 ```
 flox publish -o flox agentic-launchers
-flox publish -o flox launcher-lock-helper
 ```
 
 Requires a clean tree, pushed commits, and `flox auth login`.

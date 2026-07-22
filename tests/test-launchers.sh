@@ -91,6 +91,8 @@ _locate_lock_helper() {
     printf '%s' "$LAUNCHER_LOCK_HELPER"; return 0
   fi
   for h in \
+    "$ROOT/result-agentic-launchers/bin/_launcher-lock-helper" \
+    "$ROOT/../agentic-scratch/result-agentic-launchers/bin/_launcher-lock-helper" \
     "$ROOT/result-launcher-lock-helper/bin/_launcher-lock-helper" \
     "$ROOT/../agentic-scratch/result-launcher-lock-helper/bin/_launcher-lock-helper"
   do
