@@ -121,7 +121,7 @@ chmod 755 "$WRAP/launch"
 # Fake launch-<tool>[-omlx] for every advertised tool. Each prints
 # "launcher:<name>" followed by "<arg>" per received arg, so tests can
 # assert both which launcher was dispatched and what was forwarded.
-for tool in aider codex crush deepseek gemini hermes nanocoder openclaw opencode; do
+for tool in aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode; do
   make_fake_command "$WRAP/launch-$tool" \
     'printf "launcher:%s" "${0##*/}"' \
     'for arg in "$@"; do printf " <%s>" "$arg"; done' \
@@ -162,7 +162,7 @@ status=$?
 set -e
 assert_eq "0" "$status" "--help exits 0"
 assert_contains "$out" "Usage: launch <tool>" "--help prints usage"
-assert_contains "$out" "omlx only" "--help mentions omlx-only tools"
+assert_contains "$out" "Tools available on both backends" "--help describes shared backend support"
 set +e
 out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --list-tools)"
 status=$?
@@ -189,7 +189,7 @@ assert_contains "$out" "unknown option or missing tool" "leading-dash tool diagn
 pass "unknown and leading-dash tool names are rejected"
 
 # 4. Linux default backend dispatches every ollama-side tool.
-for tool in aider codex crush deepseek gemini hermes nanocoder openclaw opencode; do
+for tool in aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode; do
   out="$(AGENTIC_BACKEND="" PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama "$tool" --model alpha)"
   assert_eq "launcher:launch-${tool} <--model> <alpha>" "$out" "dispatch --backend ollama $tool"
 done
@@ -233,19 +233,15 @@ set -e
 assert_eq "2" "$status" "--backend= (empty) exits 2"
 pass "backend flag validation covers all invalid forms"
 
-# 7. Tool-backend guards: claude+ollama rejected; omlx accepts every tool
-# including claude.
-set +e
-out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama claude --model alpha 2>&1)"
-status=$?
-set -e
-assert_eq "2" "$status" "claude+ollama exits 2"
-assert_contains "$out" "requires the omlx backend" "claude+ollama diagnosed"
+# 7. Tool-backend cross-compatibility: Claude works on both backends, and omlx
+# accepts every advertised tool.
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama claude --model alpha)"
+assert_eq "launcher:launch-claude <--model> <alpha>" "$out" "claude+ollama dispatches to launch-claude"
 for tool in aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode; do
   out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend omlx "$tool" --model alpha)"
   assert_eq "launcher:launch-${tool}-omlx <--model> <alpha>" "$out" "omlx dispatches $tool"
 done
-pass "claude requires omlx and omlx accepts every advertised tool"
+pass "claude works on both backends and omlx accepts every advertised tool"
 
 # 8. --model / -m validation: missing value, flag-shaped value, repeated.
 set +e
@@ -311,10 +307,10 @@ pass "launch reached via symlink resolves SCRIPT_DIR safely"
 DIRECT="$TMP/direct"
 DIRECT_BIN="$TMP/direct-bin"
 mkdir -p "$DIRECT" "$DIRECT_BIN" "$TMP/cache"
-cp "$ROOT/bin/launch-hermes" "$ROOT/bin/_ollama-ensure.sh" \
-  "$ROOT/bin/_launcher-common.sh" "$DIRECT/"
+cp "$ROOT/bin/launch-claude" "$ROOT/bin/launch-hermes" \
+  "$ROOT/bin/_ollama-ensure.sh" "$ROOT/bin/_launcher-common.sh" "$DIRECT/"
 copy_lock_runtime "$DIRECT"
-chmod 755 "$DIRECT/launch-hermes"
+chmod 755 "$DIRECT/launch-claude" "$DIRECT/launch-hermes"
 make_fake_command "$DIRECT_BIN/curl" \
   'printf "%s" '\''{"models":[{"name":"alpha:latest"},{"name":"beta:latest"}]}'\'''
 make_fake_command "$DIRECT_BIN/hermes-agent" \
@@ -325,6 +321,16 @@ out="$(FLOX_ENV_CACHE="$TMP/cache" PATH="$DIRECT_BIN:/usr/bin:/bin" bash "$DIREC
 assert_eq "base=http://127.0.0.1:11434/v1 key=ollama <--model> <alpha> <--yolo>" "$out" "direct -m"
 out="$(FLOX_ENV_CACHE="$TMP/cache" PATH="$DIRECT_BIN:/usr/bin:/bin" bash "$DIRECT/launch-hermes" --model=beta)"
 assert_eq "base=http://127.0.0.1:11434/v1 key=ollama <--model> <beta>" "$out" "direct --model="
+make_fake_command "$DIRECT_BIN/claude" \
+  'printf "base=%s token=%s key_set=%s key=%s" "$ANTHROPIC_BASE_URL" "$ANTHROPIC_AUTH_TOKEN" "${ANTHROPIC_API_KEY+x}" "${ANTHROPIC_API_KEY-}"' \
+  'for arg in "$@"; do printf " <%s>" "$arg"; done' \
+  'printf "\n"'
+out="$(ANTHROPIC_BASE_URL=https://api.anthropic.com ANTHROPIC_AUTH_TOKEN=real-token \
+  ANTHROPIC_API_KEY=real-key OLLAMA_HOST=https://ollama.example/root OLLAMA_PORT="" \
+  FLOX_ENV_CACHE="$TMP/cache" PATH="$DIRECT_BIN:/usr/bin:/bin" \
+  bash "$DIRECT/launch-claude" -m alpha --dangerously-skip-permissions)"
+assert_eq "base=https://ollama.example:443/root token=ollama key_set=x key= <--model> <alpha> <--dangerously-skip-permissions>" \
+  "$out" "Claude launcher forces the normalized Ollama endpoint and credentials"
 pass "dedicated launchers accept all advertised model forms"
 
 # 13. OLLAMA_HOST normalization preserves schemes, paths, and IPv6.

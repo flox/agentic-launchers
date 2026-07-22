@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${BASH_SOURCE[0]}" in
+  */*) LAUNCHER_SCRIPT_DIR="${BASH_SOURCE[0]%/*}" ;;
+  *) LAUNCHER_SCRIPT_DIR="." ;;
+esac
+LAUNCHER_SCRIPT_DIR="$(cd -- "$LAUNCHER_SCRIPT_DIR" && pwd -P)" || exit 1
+
+# Wrapper for Claude Code to use Ollama's Anthropic-compatible API directly.
+#
+# Usage: launch-claude --model <model> [claude args...]
+#   e.g. launch-claude --model qwen3.5
+
+MODEL=""
+CLAUDE_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model|-m)
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        echo "Error: $1 requires a model value" >&2
+        exit 2
+      fi
+      MODEL="$2"
+      shift 2
+      ;;
+    --model=*)
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        echo "Error: --model requires a non-empty value" >&2
+        exit 2
+      fi
+      shift
+      ;;
+    *)
+      CLAUDE_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$MODEL" ]]; then
+  echo "Usage: launch-claude --model <model> [claude args...]" >&2
+  exit 1
+fi
+
+source "$LAUNCHER_SCRIPT_DIR/_ollama-ensure.sh"
+ollama_normalize_base_url
+ollama_ensure_model "$MODEL" "$OLLAMA_BASE_URL" || exit 1
+
+# Claude Code prefers ANTHROPIC_AUTH_TOKEN for third-party Anthropic-compatible
+# endpoints. Force the Ollama credentials so inherited Anthropic credentials
+# cannot redirect or authenticate this explicitly Ollama-bound invocation.
+export ANTHROPIC_BASE_URL="$OLLAMA_BASE_URL"
+export ANTHROPIC_AUTH_TOKEN="ollama"
+export ANTHROPIC_API_KEY=""
+
+exec claude --model "$MODEL" ${CLAUDE_ARGS[@]+"${CLAUDE_ARGS[@]}"}

@@ -43,7 +43,7 @@ Common checks:
 
 1. Parses args (`--backend`, `--model`, `--list-tools`, `--help`, and passthrough)
 2. Resolves the backend (explicit flag > `$AGENTIC_BACKEND` > platform default)
-3. Validates: tool exists for the chosen backend; `claude` requires omlx
+3. Validates that the tool exists for the chosen backend
 4. For ollama backend, rewrites `--model X?` via `ollama-model-resolver`
 5. `exec`s `bin/launch-<tool>` (ollama) or `bin/launch-<tool>-omlx` (omlx) with the resolved args
 
@@ -62,7 +62,7 @@ Shared helpers in `bin/` (sourced, never executed):
 - `_launcher_lock_helper_path` — honors `$LAUNCHER_LOCK_HELPER` env var (test/dev), else `command -v _launcher-lock-helper` on PATH
 
 Protocol mapping (why some tools need llamacpp-proxy and others don't):
-- `claude` speaks Anthropic Messages — omlx serves it natively; on ollama, no direct path (omlx-only)
+- `claude` speaks Anthropic Messages — both omlx and ollama serve compatible endpoints natively
 - `codex`, `opencode`, `hermes`, `aider`, `deepseek`, `nanocoder`, `crush`, `openclaw` — OpenAI-compat, talk directly to ollama's `/v1` or to omlx
 - `gemini` speaks the Gemini API — always needs `llamacpp-proxy` to translate Gemini ↔ OpenAI ↔ backend
 

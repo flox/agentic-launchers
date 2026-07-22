@@ -37,10 +37,10 @@ SCRIPT_DIR="$(cd -- "$_script_parent" && pwd -P)"
 unset _launch_self _script_parent
 unset -f _launch_resolve_symlinks
 
-# Tools per backend. OMLX_TOOLS must remain a superset of OLLAMA_TOOLS
-# (currently: adds `claude`). Both kept sorted so --list-tools output is
-# stable and _all_tools can trivially deduplicate by iterating OMLX_TOOLS.
-OLLAMA_TOOLS=(aider codex crush deepseek gemini hermes nanocoder openclaw opencode)
+# Tools per backend. OMLX_TOOLS must remain a superset of OLLAMA_TOOLS.
+# Both currently advertise the same tools and remain sorted so --list-tools
+# output is stable and _all_tools can iterate OMLX_TOOLS without deduplication.
+OLLAMA_TOOLS=(aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode)
 OMLX_TOOLS=(aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode)
 
 _all_tools() {
@@ -71,10 +71,7 @@ Options:
                         --backend is not given.
 
 Tools available on both backends:
-  aider, codex, crush, deepseek, gemini, hermes, nanocoder, openclaw, opencode
-
-Tools available on omlx only:
-  claude
+  aider, claude, codex, crush, deepseek, gemini, hermes, nanocoder, openclaw, opencode
 EOF
 }
 
