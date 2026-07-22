@@ -51,7 +51,8 @@
       },
       "hermes-agent": {
         "pkg-path": "flox/hermes-agent",
-        "pkg-group": "hermes-agent"
+        "pkg-group": "hermes-agent",
+        "priority": 3
       },
       "jq": {
         "pkg-path": "jq"
@@ -83,7 +84,20 @@
         "pkg-group": "ollama-darwin",
         "priority": 1,
         "systems": [
-          "x86_64-darwin",
+          "aarch64-darwin"
+        ]
+      },
+      "ollama-model-resolver": {
+        "store-path": "/nix/store/8kxqskxzidwkb41nfvkbq6pi7c44an8r-ollama-model-resolver-0.4.2",
+        "systems": [
+          "x86_64-linux"
+        ]
+      },
+      "omlx": {
+        "pkg-path": "flox/omlx",
+        "pkg-group": "omlx",
+        "priority": 6,
+        "systems": [
           "aarch64-darwin"
         ]
       },
@@ -97,25 +111,40 @@
       }
     },
     "hook": {
-      "on-activate": "# === MODEL STORAGE ===\n# Use Ollama's default location (~/.ollama/models) unless user overrides\n# To use project-local storage: OLLAMA_MODELS=$FLOX_ENV_CACHE/models flox activate\nexport OLLAMA_MODELS=\"${OLLAMA_MODELS:-$HOME/.ollama/models}\"\n\n# Create models directory if using custom location\nif [ \"$OLLAMA_MODELS\" = \"$FLOX_ENV_CACHE/models\" ]; then\n  mkdir -p \"$OLLAMA_MODELS\"\nfi\n\n# === SERVER CONFIGURATION ===\nexport OLLAMA_HOST=\"${OLLAMA_HOST:-127.0.0.1:11434}\"\nexport OLLAMA_ORIGINS=\"${OLLAMA_ORIGINS:-}\"  # Use Ollama defaults\n\n# === PERFORMANCE & MEMORY ===\nexport OLLAMA_CONTEXT_LENGTH=\"${OLLAMA_CONTEXT_LENGTH:-}\"  # Default: 4096\nexport OLLAMA_KEEP_ALIVE=\"${OLLAMA_KEEP_ALIVE:-}\"  # Default: 5m\nexport OLLAMA_MAX_LOADED_MODELS=\"${OLLAMA_MAX_LOADED_MODELS:-}\"  # Default: auto (3 * GPU count)\nexport OLLAMA_NUM_PARALLEL=\"${OLLAMA_NUM_PARALLEL:-}\"  # Default: 1\nexport OLLAMA_MAX_QUEUE=\"${OLLAMA_MAX_QUEUE:-}\"  # Default: 512\nexport OLLAMA_LOAD_TIMEOUT=\"${OLLAMA_LOAD_TIMEOUT:-}\"  # Default: 5m\n\n# === GPU CONFIGURATION ===\nexport OLLAMA_FLASH_ATTENTION=\"${OLLAMA_FLASH_ATTENTION:-}\"  # Experimental\nexport OLLAMA_KV_CACHE_TYPE=\"${OLLAMA_KV_CACHE_TYPE:-}\"  # Default: f16\nexport OLLAMA_GPU_OVERHEAD=\"${OLLAMA_GPU_OVERHEAD:-}\"  # Default: 0\n# Only set CUDA_VISIBLE_DEVICES if user explicitly provides it\nif [ -n \"${CUDA_VISIBLE_DEVICES+x}\" ]; then\n  export CUDA_VISIBLE_DEVICES\nfi\n\n# Detect GPU availability\nexport _FLOX_ENV_CUDA_DETECTION=0\nif command -v nvidia-smi >/dev/null 2>&1; then\n  if nvidia-smi -L 2>/dev/null | grep -q \"GPU\"; then\n    export _FLOX_ENV_CUDA_DETECTION=1\n  fi\nfi\n\n# === ADVANCED / EXPERIMENTAL ===\nexport OLLAMA_DEBUG=\"${OLLAMA_DEBUG:-0}\"  # 0 = disabled, 1 = enabled\nexport OLLAMA_SCHED_SPREAD=\"${OLLAMA_SCHED_SPREAD:-}\"  # Schedule across all GPUs\nexport OLLAMA_NOPRUNE=\"${OLLAMA_NOPRUNE:-}\"  # Don't prune model blobs\nexport OLLAMA_LLM_LIBRARY=\"${OLLAMA_LLM_LIBRARY:-}\"  # Bypass autodetection\nexport OLLAMA_AUTH=\"${OLLAMA_AUTH:-}\"  # Experimental authentication\n\n  export OLLAMA_HOST=\"${OLLAMA_HOST:-127.0.0.1}\"\n  export OLLAMA_PORT=\"${OLLAMA_PORT:-11434}\"\n  export OPENAI_API_BASE=\"${OPENAI_API_BASE:-http://127.0.0.1:11434/v1}\"\n  export OPENAI_API_KEY=\"${OPENAI_API_KEY:-ollama}\"\n  export OMLX_HOST=\"${OMLX_HOST:-127.0.0.1}\"\n  export OMLX_PORT=\"${OMLX_PORT:-8000}\"\n  export LLAMACPP_PROXY_OLLAMA_LISTEN=\"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\"\n  export LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN=\"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n  export LLAMACPP_PROXY_OMLX_LISTEN=\"${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}\"\n  export LLAMACPP_PROXY_GEMINI_OMLX_LISTEN=\"${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}\"\n"
+      "on-activate": "# Publish the service's bind address (OMLX_HOST / OMLX_PORT) and admin key\n# (OMLX_API_KEY) so consumers and interactive shells can reach it.\n# Override any value at runtime by writing to:\n#   $FLOX_ENV_CACHE/omlx.host       e.g. \"0.0.0.0\"\n#   $FLOX_ENV_CACHE/omlx.port       e.g. \"9001\"\n#   $FLOX_ENV_CACHE/omlx.api-key    enables admin endpoints when set\nexport OMLX_HOST=\"$(cat \"$FLOX_ENV_CACHE/omlx.host\" 2>/dev/null || echo 127.0.0.1)\"\nexport OMLX_PORT=\"$(cat \"$FLOX_ENV_CACHE/omlx.port\" 2>/dev/null || echo 8000)\"\nexport OMLX_API_KEY=\"$(cat \"$FLOX_ENV_CACHE/omlx.api-key\" 2>/dev/null || true)\"\n\n# === MODEL STORAGE ===\n# Use Ollama's default location (~/.ollama/models) unless user overrides\n# To use project-local storage: OLLAMA_MODELS=$FLOX_ENV_CACHE/models flox activate\nexport OLLAMA_MODELS=\"${OLLAMA_MODELS:-$HOME/.ollama/models}\"\n\n# Create models directory if using custom location\nif [ \"$OLLAMA_MODELS\" = \"$FLOX_ENV_CACHE/models\" ]; then\n  mkdir -p \"$OLLAMA_MODELS\"\nfi\n\n# === SERVER CONFIGURATION ===\nexport OLLAMA_HOST=\"${OLLAMA_HOST:-127.0.0.1:11434}\"\nexport OLLAMA_ORIGINS=\"${OLLAMA_ORIGINS:-}\"  # Use Ollama defaults\n\n# === PERFORMANCE & MEMORY ===\nexport OLLAMA_CONTEXT_LENGTH=\"${OLLAMA_CONTEXT_LENGTH:-}\"  # Default: 4096\nexport OLLAMA_KEEP_ALIVE=\"${OLLAMA_KEEP_ALIVE:-}\"  # Default: 5m\nexport OLLAMA_MAX_LOADED_MODELS=\"${OLLAMA_MAX_LOADED_MODELS:-}\"  # Default: auto (3 * GPU count)\nexport OLLAMA_NUM_PARALLEL=\"${OLLAMA_NUM_PARALLEL:-}\"  # Default: 1\nexport OLLAMA_MAX_QUEUE=\"${OLLAMA_MAX_QUEUE:-}\"  # Default: 512\nexport OLLAMA_LOAD_TIMEOUT=\"${OLLAMA_LOAD_TIMEOUT:-}\"  # Default: 5m\n\n# === GPU CONFIGURATION ===\nexport OLLAMA_FLASH_ATTENTION=\"${OLLAMA_FLASH_ATTENTION:-}\"  # Experimental\nexport OLLAMA_KV_CACHE_TYPE=\"${OLLAMA_KV_CACHE_TYPE:-}\"  # Default: f16\nexport OLLAMA_GPU_OVERHEAD=\"${OLLAMA_GPU_OVERHEAD:-}\"  # Default: 0\n# Only set CUDA_VISIBLE_DEVICES if user explicitly provides it\nif [ -n \"${CUDA_VISIBLE_DEVICES+x}\" ]; then\n  export CUDA_VISIBLE_DEVICES\nfi\n\n# Detect GPU availability\nexport _FLOX_ENV_CUDA_DETECTION=0\nif command -v nvidia-smi >/dev/null 2>&1; then\n  if nvidia-smi -L 2>/dev/null | grep -q \"GPU\"; then\n    export _FLOX_ENV_CUDA_DETECTION=1\n  fi\nfi\n\n# === ADVANCED / EXPERIMENTAL ===\nexport OLLAMA_DEBUG=\"${OLLAMA_DEBUG:-0}\"  # 0 = disabled, 1 = enabled\nexport OLLAMA_SCHED_SPREAD=\"${OLLAMA_SCHED_SPREAD:-}\"  # Schedule across all GPUs\nexport OLLAMA_NOPRUNE=\"${OLLAMA_NOPRUNE:-}\"  # Don't prune model blobs\nexport OLLAMA_LLM_LIBRARY=\"${OLLAMA_LLM_LIBRARY:-}\"  # Bypass autodetection\nexport OLLAMA_AUTH=\"${OLLAMA_AUTH:-}\"  # Experimental authentication\n\n  if [[ -f \"$FLOX_ENV/etc/agentic-bootstrap.sh\" ]]; then\n    source \"$FLOX_ENV/etc/agentic-bootstrap.sh\"\n  elif [[ -n \"${FLOX_ENV_PROJECT:-}\" && -f \"$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh\" ]]; then\n    source \"$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh\"\n  fi\n"
     },
     "profile": {
       "common": "  export PATH=\"$FLOX_ENV_PROJECT/bin:$PATH\"\n"
     },
-    "options": {},
+    "options": {
+      "systems": [
+        "aarch64-darwin",
+        "aarch64-linux",
+        "x86_64-linux"
+      ]
+    },
     "services": {
       "llamacpp-proxy-ollama": {
-        "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  _ollama=\"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\"\n  if ! curl -sf --connect-timeout 3 --max-time 5 \"http://${_ollama}/\" >/dev/null 2>&1; then\n    echo \"ollama is not reachable at ${_ollama} — start ollama before this service\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\" \\\n    --backend \"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n"
+        "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  _ollama=\"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\"\n  for _i in $(seq 1 30); do\n    curl -sf --connect-timeout 2 --max-time 3 \"http://${_ollama}/\" >/dev/null 2>&1 && break\n    sleep 1\n  done\n  if ! curl -sf --connect-timeout 3 --max-time 5 \"http://${_ollama}/\" >/dev/null 2>&1; then\n    echo \"ollama is not reachable at ${_ollama} after 30s — is it running?\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\" \\\n    --backend \"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n"
       },
       "llamacpp-proxy-omlx": {
         "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  # Read key from omlx's own settings file (authoritative source)\n  _api_key=\"$(jq -r '.auth.api_key // empty' \"$HOME/.omlx/settings.json\" 2>/dev/null || true)\"\n  if [[ -z \"$_api_key\" ]]; then\n    echo \"Error: omlx API key not found in ~/.omlx/settings.json — is omlx running?\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-omlx.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}\" \\\n    --backend \"${OMLX_HOST:-127.0.0.1}:${OMLX_PORT:-8000}\" \\\n    --backend-api-key \"$_api_key\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}\"\n"
       },
       "ollama": {
         "command": "if [ -x \"$FLOX_ENV/bin/omlx\" ]; then\n  echo \"omlx found at $FLOX_ENV/bin/omlx; skipping 'ollama serve' because omlx will manage Ollama.\" >&2\n  exit 0\nfi\n\nexec ollama serve\n"
+      },
+      "omlx": {
+        "command": "host=\"$(cat \"$FLOX_ENV_CACHE/omlx.host\" 2>/dev/null || echo 127.0.0.1)\"\nport=\"$(cat \"$FLOX_ENV_CACHE/omlx.port\" 2>/dev/null || echo 8000)\"\nkey=\"$(cat \"$FLOX_ENV_CACHE/omlx.api-key\" 2>/dev/null || true)\"\nif [ -n \"$key\" ]; then\n  exec omlx serve --host \"$host\" --port \"$port\" --api-key \"$key\"\nelse\n  exec omlx serve --host \"$host\" --port \"$port\"\nfi\n"
       }
     }
   },
   "packages": [
+    {
+      "install_id": "ollama-model-resolver",
+      "store_path": "/nix/store/8kxqskxzidwkb41nfvkbq6pi7c44an8r-ollama-model-resolver-0.4.2",
+      "system": "x86_64-linux",
+      "priority": 5
+    },
     {
       "attr_path": "claude-code",
       "broken": false,
@@ -173,36 +202,6 @@
         "out": "/nix/store/0qrv37lvkjxvyw7dzswmh8xr24h367j1-claude-code-2.1.170"
       },
       "system": "aarch64-linux",
-      "group": "claude-code",
-      "priority": 5
-    },
-    {
-      "attr_path": "claude-code",
-      "broken": false,
-      "derivation": "/nix/store/vqdvn2rlprlvdswsbfbg3lswkclpmzys-claude-code-2.1.170.drv",
-      "description": "Agentic coding tool from Anthropic",
-      "install_id": "claude-code",
-      "license": "Unfree",
-      "locked_url": "https://github.com/flox/floxenvs?rev=fea9fbd9871ddac6e85a7c76e2da1c45e16d599c",
-      "name": "claude-code-2.1.170",
-      "pname": "claude-code",
-      "rev": "fea9fbd9871ddac6e85a7c76e2da1c45e16d599c",
-      "rev_count": 7033,
-      "rev_date": "2026-06-09T20:04:59Z",
-      "scrape_date": "2026-06-11T16:58:38.133449Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": true,
-      "version": "2.1.170",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/xcbf72p73k7xl09bq877kis7rg4g5l3q-claude-code-2.1.170"
-      },
-      "system": "x86_64-darwin",
       "group": "claude-code",
       "priority": 5
     },
@@ -299,36 +298,6 @@
     {
       "attr_path": "codex",
       "broken": false,
-      "derivation": "/nix/store/jryy4bsrw8zjx6qfwmaggqwdzxab41m6-codex-0.137.0.drv",
-      "description": "OpenAI Codex CLI - a coding agent that runs locally",
-      "install_id": "codex",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/floxenvs?rev=242357552d7abffc8c1d1ada58d14560b0f0d4d2",
-      "name": "codex-0.137.0",
-      "pname": "codex",
-      "rev": "242357552d7abffc8c1d1ada58d14560b0f0d4d2",
-      "rev_count": 6101,
-      "rev_date": "2026-06-04T02:47:39Z",
-      "scrape_date": "2026-06-11T16:58:38.133456Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "0.137.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/1yj96kix9hl67yka6dda32vpya97i8ai-codex-0.137.0"
-      },
-      "system": "x86_64-darwin",
-      "group": "codex",
-      "priority": 5
-    },
-    {
-      "attr_path": "codex",
-      "broken": false,
       "derivation": "/nix/store/4x8hy3bggwjvl2lwlkym6wg7bpgp8wac-codex-0.137.0.drv",
       "description": "OpenAI Codex CLI - a coding agent that runs locally",
       "install_id": "codex",
@@ -419,36 +388,6 @@
     {
       "attr_path": "crush",
       "broken": false,
-      "derivation": "/nix/store/6bziv657y14c3syjam8f680389nkd412-crush-0.66.0.drv",
-      "description": "Glamourous AI coding agent for your favourite terminal",
-      "install_id": "crush",
-      "license": "FSL-1.1-MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=ec0dd4c37eabe9042c0d7dccbe550d407b51a28b",
-      "name": "crush-0.66.0",
-      "pname": "crush",
-      "rev": "ec0dd4c37eabe9042c0d7dccbe550d407b51a28b",
-      "rev_count": 3677,
-      "rev_date": "2026-05-20T12:30:23Z",
-      "scrape_date": "2026-06-11T16:58:38.133461Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": true,
-      "version": "0.66.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/k4yfklvhlmrxakikg4nhhpqnv41v3c8r-crush-0.66.0"
-      },
-      "system": "x86_64-darwin",
-      "group": "crush",
-      "priority": 5
-    },
-    {
-      "attr_path": "crush",
-      "broken": false,
       "derivation": "/nix/store/caa8zdkbdzi042j37n1d7vnki4ff5v70-crush-0.66.0.drv",
       "description": "Glamourous AI coding agent for your favourite terminal",
       "install_id": "crush",
@@ -533,36 +472,6 @@
         "out": "/nix/store/w4psvhbgn3pb1rhb937zfgf16fngap1k-deepseek-tui-0.8.40"
       },
       "system": "aarch64-linux",
-      "group": "deepseek-tui",
-      "priority": 5
-    },
-    {
-      "attr_path": "deepseek-tui",
-      "broken": false,
-      "derivation": "/nix/store/jby6jf4xp7y329znzj83lynd3gq4airr-deepseek-tui-0.8.40.drv",
-      "description": "Coding agent for DeepSeek models that runs in your terminal",
-      "install_id": "deepseek-tui",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=862ee3f3913627276fe0139e5bebfc1dfeb459fc",
-      "name": "deepseek-tui-0.8.40",
-      "pname": "deepseek-tui",
-      "rev": "862ee3f3913627276fe0139e5bebfc1dfeb459fc",
-      "rev_count": 3793,
-      "rev_date": "2026-05-21T07:45:06Z",
-      "scrape_date": "2026-06-11T16:58:38.133466Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "0.8.40",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/3a7sh4w3b24w74r6cij3cqcwc1a7vfg6-deepseek-tui-0.8.40"
-      },
-      "system": "x86_64-darwin",
       "group": "deepseek-tui",
       "priority": 5
     },
@@ -721,36 +630,6 @@
     {
       "attr_path": "gemini-cli",
       "broken": false,
-      "derivation": "/nix/store/idhdydg4i6ld241b8jrbwgxc7a51l4rl-gemini-cli-0.45.2.drv",
-      "description": "AI agent that brings Gemini directly into your terminal",
-      "install_id": "gemini-cli",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/floxenvs?rev=7fa992724e5f6956c14aac3cde591a7bd6ca7624",
-      "name": "gemini-cli-0.45.2",
-      "pname": "gemini-cli",
-      "rev": "7fa992724e5f6956c14aac3cde591a7bd6ca7624",
-      "rev_count": 6449,
-      "rev_date": "2026-06-06T01:23:47Z",
-      "scrape_date": "2026-06-11T16:58:38.133482Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "0.45.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/by70rh9sf4z6q314ykhgxy23xvsj2rfn-gemini-cli-0.45.2"
-      },
-      "system": "x86_64-darwin",
-      "group": "gemini-cli",
-      "priority": 5
-    },
-    {
-      "attr_path": "gemini-cli",
-      "broken": false,
       "derivation": "/nix/store/4gv7gylib77xxy970f5qi6w964827wf9-gemini-cli-0.45.2.drv",
       "description": "AI agent that brings Gemini directly into your terminal",
       "install_id": "gemini-cli",
@@ -806,7 +685,7 @@
       },
       "system": "aarch64-darwin",
       "group": "hermes-agent",
-      "priority": 5
+      "priority": 3
     },
     {
       "attr_path": "hermes-agent",
@@ -836,37 +715,7 @@
       },
       "system": "aarch64-linux",
       "group": "hermes-agent",
-      "priority": 5
-    },
-    {
-      "attr_path": "hermes-agent",
-      "broken": false,
-      "derivation": "/nix/store/k9wxm4rpr58wj20r1qlmw62zpdj4xj8g-hermes-agent-env.drv",
-      "description": "Self-improving AI agent from Nous Research",
-      "install_id": "hermes-agent",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=5163f1b838d5e6cba01e8240aeb1bab03a9e3dae",
-      "name": "hermes-agent-env",
-      "pname": "hermes-agent",
-      "rev": "5163f1b838d5e6cba01e8240aeb1bab03a9e3dae",
-      "rev_count": 6457,
-      "rev_date": "2026-06-06T01:51:30Z",
-      "scrape_date": "2026-06-11T16:58:38.133487Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2026.6.5",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/3avw7w8kjj86iyndgbr4wiqsbcnn6ysv-hermes-agent-env"
-      },
-      "system": "x86_64-darwin",
-      "group": "hermes-agent",
-      "priority": 5
+      "priority": 3
     },
     {
       "attr_path": "hermes-agent",
@@ -896,7 +745,7 @@
       },
       "system": "x86_64-linux",
       "group": "hermes-agent",
-      "priority": 5
+      "priority": 3
     },
     {
       "attr_path": "llamacpp-proxy",
@@ -1056,37 +905,6 @@
     {
       "attr_path": "nanocoder",
       "broken": false,
-      "derivation": "/nix/store/0vgg78s90awx0k3wg37cxxp77amjgk0n-nanocoder-1.24.1.drv",
-      "description": "A beautiful local-first coding agent running in your terminal - built by the community for the community",
-      "install_id": "nanocoder",
-      "license": "MIT",
-      "locked_url": "git@github.com:barstoolbluz/nix-ai-tools.git?rev=a3a28eb462220f5b452c3ad5911fa1b0850ac7cd",
-      "name": "nanocoder-1.24.1",
-      "pname": "nanocoder",
-      "rev": "a3a28eb462220f5b452c3ad5911fa1b0850ac7cd",
-      "rev_count": 81,
-      "rev_date": "2026-04-07T10:45:38Z",
-      "scrape_date": "2026-06-11T16:58:38.133498Z",
-      "stabilities": [
-        "stable",
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.24.1",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/jmsx7n9gfgar98nz4icc6an7jrpivwgr-nanocoder-1.24.1"
-      },
-      "system": "x86_64-darwin",
-      "group": "nanocoder",
-      "priority": 5
-    },
-    {
-      "attr_path": "nanocoder",
-      "broken": false,
       "derivation": "/nix/store/5hi3jm28fbs5sxqspz9cz337lyvg0pz5-nanocoder-1.24.1.drv",
       "description": "A beautiful local-first coding agent running in your terminal - built by the community for the community",
       "install_id": "nanocoder",
@@ -1204,34 +1022,34 @@
       "priority": 1
     },
     {
-      "attr_path": "ollama",
+      "attr_path": "omlx",
       "broken": false,
-      "derivation": "/nix/store/91lm7fa0mpmpcqir47xv0z7cpbgdckqx-ollama-0.30.7.drv",
-      "description": "Get up and running with large language models locally",
-      "install_id": "ollama-darwin",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=1f6a2c8603e1c987bc5f28d64ddea7615d97d8e7",
-      "name": "ollama-0.30.7",
-      "pname": "ollama",
-      "rev": "1f6a2c8603e1c987bc5f28d64ddea7615d97d8e7",
-      "rev_count": 7019,
-      "rev_date": "2026-06-09T01:33:28Z",
-      "scrape_date": "2026-06-11T16:58:38.133506Z",
+      "derivation": "/nix/store/njq4dcbqbragjqzja1kmz62h86hrkn3x-omlx-env.drv",
+      "description": "LLM inference server, optimized for your Mac",
+      "install_id": "omlx",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/floxenvs?rev=1f7e2ac0c804709ff6c39a902576c4e2b206c848",
+      "name": "omlx-env",
+      "pname": "omlx",
+      "rev": "1f7e2ac0c804709ff6c39a902576c4e2b206c848",
+      "rev_count": 7021,
+      "rev_date": "2026-06-09T01:49:06Z",
+      "scrape_date": "2026-06-12T22:56:36.606350243Z",
       "stabilities": [
         "staging",
         "unstable"
       ],
       "unfree": false,
-      "version": "0.30.7",
+      "version": "0.4.2",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/f5rg71p7bjyr0clkdrjzn0z0b17vcnd0-ollama-0.30.7"
+        "out": "/nix/store/0ar3l0fgyqwm2ylkvqwp3md8s8a4pcym-omlx-env"
       },
-      "system": "x86_64-darwin",
-      "group": "ollama-darwin",
-      "priority": 1
+      "system": "aarch64-darwin",
+      "group": "omlx",
+      "priority": 6
     },
     {
       "attr_path": "openclaw",
@@ -1288,35 +1106,6 @@
         "out": "/nix/store/zsh0nslpihffgcb19wdshciq64q6d51f-openclaw-2026.5.7"
       },
       "system": "aarch64-linux",
-      "group": "openclaw",
-      "priority": 5
-    },
-    {
-      "attr_path": "openclaw",
-      "broken": false,
-      "derivation": "/nix/store/1alv84dv4b2mqhflmf730hsahn5dg038-openclaw-2026.5.7.drv",
-      "description": "Self-hosted, open-source AI assistant/agent",
-      "install_id": "openclaw",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=8e2eb9595dcc3d070758d6212e42d0e1044115b7",
-      "name": "openclaw-2026.5.7",
-      "pname": "openclaw",
-      "rev": "8e2eb9595dcc3d070758d6212e42d0e1044115b7",
-      "rev_count": 3076,
-      "rev_date": "2026-05-08T20:13:52Z",
-      "scrape_date": "2026-06-11T16:58:38.133511Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2026.5.7",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/j2ikml6bydpzpr62srqqy8v7a30h9m6y-openclaw-2026.5.7"
-      },
-      "system": "x86_64-darwin",
       "group": "openclaw",
       "priority": 5
     },
@@ -1412,36 +1201,6 @@
     {
       "attr_path": "opencode",
       "broken": false,
-      "derivation": "/nix/store/9hya94hkyff9r220lfv0mrbcc484lplb-opencode-1.16.2.drv",
-      "description": "AI coding agent built for the terminal",
-      "install_id": "opencode",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/floxenvs?rev=ad73e1cd9939e5dfba97ccb4e5369593930cf559",
-      "name": "opencode-1.16.2",
-      "pname": "opencode",
-      "rev": "ad73e1cd9939e5dfba97ccb4e5369593930cf559",
-      "rev_count": 6371,
-      "rev_date": "2026-06-05T19:27:04Z",
-      "scrape_date": "2026-06-11T16:58:38.133519Z",
-      "stabilities": [
-        "staging",
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.16.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/rc8x69ihl0nndmw0n9f2wzj0pcmjlm8m-opencode-1.16.2"
-      },
-      "system": "x86_64-darwin",
-      "group": "opencode",
-      "priority": 5
-    },
-    {
-      "attr_path": "opencode",
-      "broken": false,
       "derivation": "/nix/store/i6zvkz1kkdnbh8xc3qgdbgk66y09k6ri-opencode-1.16.2.drv",
       "description": "AI coding agent built for the terminal",
       "install_id": "opencode",
@@ -1526,36 +1285,6 @@
         "out": "/nix/store/nwsdll76spfniyzk5fs5kvw3ifil5k73-aider-chat-0.86.1"
       },
       "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "aider-chat",
-      "broken": false,
-      "derivation": "/nix/store/w030q5lnpa68rcxcbisvwq0l048dxdgl-aider-chat-0.86.1.drv",
-      "description": "AI pair programming in your terminal",
-      "install_id": "aider-chat",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "aider-chat-0.86.1",
-      "pname": "aider-chat",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:53.240361Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "0.86.1",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "dist": "/nix/store/k4ljcvjwsxg92nqi1va6ckwzdcblkayp-aider-chat-0.86.1-dist",
-        "out": "/nix/store/rkifsv5jjv4k0lzmgc0zaj1rlbidl0f4-aider-chat-0.86.1"
-      },
-      "system": "x86_64-darwin",
       "group": "toplevel",
       "priority": 5
     },
@@ -1679,41 +1408,6 @@
     {
       "attr_path": "bash",
       "broken": false,
-      "derivation": "/nix/store/rr74cxir9absck7h0jzpwn1l5xrv56db-bash-interactive-5.3p3.drv",
-      "description": "GNU Bourne-Again Shell, the de facto standard shell on Linux (for interactive use)",
-      "install_id": "bash",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "bash-interactive-5.3p3",
-      "pname": "bash",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:53.402135Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "5.3p3",
-      "outputs_to_install": [
-        "man",
-        "out",
-        "out"
-      ],
-      "outputs": {
-        "dev": "/nix/store/ybxz71hisg73c706xfmbhi9pg0w66yig-bash-interactive-5.3p3-dev",
-        "doc": "/nix/store/7caqc1q9glxh9d14jlzqvl86mavba9qm-bash-interactive-5.3p3-doc",
-        "info": "/nix/store/8lxlghjr4hsgjvdc77yzzd7xkcpkv9gr-bash-interactive-5.3p3-info",
-        "man": "/nix/store/8df8vv43drby749m08a083mmnk433dvg-bash-interactive-5.3p3-man",
-        "out": "/nix/store/zvg29ysm8gkipkv03mbyq5hzjkswlnpg-bash-interactive-5.3p3"
-      },
-      "system": "x86_64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "bash",
-      "broken": false,
       "derivation": "/nix/store/azd4vaik6ssl5d411m5fsa757sic630r-bash-interactive-5.3p3.drv",
       "description": "GNU Bourne-Again Shell, the de facto standard shell on Linux (for interactive use)",
       "install_id": "bash",
@@ -1829,38 +1523,6 @@
     {
       "attr_path": "gawk",
       "broken": false,
-      "derivation": "/nix/store/5b063pwb213y5yjki3g87zx0xbi6mrik-gawk-5.3.2.drv",
-      "description": "GNU implementation of the Awk programming language",
-      "install_id": "gawk",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "gawk-5.3.2",
-      "pname": "gawk",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:54.355020Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "5.3.2",
-      "outputs_to_install": [
-        "man",
-        "out"
-      ],
-      "outputs": {
-        "info": "/nix/store/88shyivadqy106vd3p5ka2r38fzylwaj-gawk-5.3.2-info",
-        "man": "/nix/store/ri02frgrap8bmwiranvmlv54gc9z3axr-gawk-5.3.2-man",
-        "out": "/nix/store/vgk81ybwgw7ql83cmq6jxbbv8jjyhs2z-gawk-5.3.2"
-      },
-      "system": "x86_64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "gawk",
-      "broken": false,
       "derivation": "/nix/store/sycqg6xajkzkp8sf39c7spm67ggpzanc-gawk-5.3.2.drv",
       "description": "GNU implementation of the Awk programming language",
       "install_id": "gawk",
@@ -1952,36 +1614,6 @@
         "out": "/nix/store/gzdcfmx2p9nvd4z21b6ns00cp4sv1d2h-git-2.51.2"
       },
       "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "git",
-      "broken": false,
-      "derivation": "/nix/store/hr9vhpi6km3knm1ym2kf0z9bm7sghj74-git-2.51.2.drv",
-      "description": "Distributed version control system",
-      "install_id": "git",
-      "license": "GPL-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "git-2.51.2",
-      "pname": "git",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:54.445260Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2.51.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "doc": "/nix/store/vrisnm56c5v8mzbv55yrq28wgkvga8nm-git-2.51.2-doc",
-        "out": "/nix/store/zz5xiyzpnn06cdgw1xnlvs1sbly5247r-git-2.51.2"
-      },
-      "system": "x86_64-darwin",
       "group": "toplevel",
       "priority": 5
     },
@@ -2085,37 +1717,6 @@
     {
       "attr_path": "gnused",
       "broken": false,
-      "derivation": "/nix/store/r5jb2sqi9v9q4kbnbx4qy3j6vf9x1mrq-gnused-4.9.drv",
-      "description": "GNU sed, a batch stream editor",
-      "install_id": "gnused",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "gnused-4.9",
-      "pname": "gnused",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:54.590894Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "4.9",
-      "outputs_to_install": [
-        "out",
-        "out"
-      ],
-      "outputs": {
-        "info": "/nix/store/nq47w0avvqk2r0ln7splxxqrmbk17h8n-gnused-4.9-info",
-        "out": "/nix/store/7w2wwlbr9rmjlr34ng42hbp00hwjaawz-gnused-4.9"
-      },
-      "system": "x86_64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "gnused",
-      "broken": false,
       "derivation": "/nix/store/379i0mbr9krm4pp924s43k1mxgpjy36d-gnused-4.9.drv",
       "description": "GNU sed, a batch stream editor",
       "install_id": "gnused",
@@ -2204,35 +1805,6 @@
         "out": "/nix/store/r349n4jjvw190ayfcqb6s17hmjbslmk6-gum-0.17.0"
       },
       "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "gum",
-      "broken": false,
-      "derivation": "/nix/store/n4s09hi7ccmynkcwdsp7zqvsy85b38c9-gum-0.17.0.drv",
-      "description": "Tasty Bubble Gum for your shell",
-      "install_id": "gum",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "gum-0.17.0",
-      "pname": "gum",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:34:54.796995Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "0.17.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/f598g2fggah67vk41srma5ii2h651d1s-gum-0.17.0"
-      },
-      "system": "x86_64-darwin",
       "group": "toplevel",
       "priority": 5
     },
@@ -2339,40 +1911,6 @@
     {
       "attr_path": "jq",
       "broken": false,
-      "derivation": "/nix/store/sgwaavgs80mxgvnlgwdq0vpf81lanlwg-jq-1.8.1.drv",
-      "description": "Lightweight and flexible command-line JSON processor",
-      "install_id": "jq",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "name": "jq-1.8.1",
-      "pname": "jq",
-      "rev": "c0b0e0fddf73fd517c3471e546c0df87a42d53f4",
-      "rev_count": 917670,
-      "rev_date": "2025-12-28T06:08:05Z",
-      "scrape_date": "2025-12-29T03:35:09.949408Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.8.1",
-      "outputs_to_install": [
-        "bin",
-        "man"
-      ],
-      "outputs": {
-        "bin": "/nix/store/0kz2h1wisnvpmavfra6n8fi0x2brhfg6-jq-1.8.1-bin",
-        "dev": "/nix/store/w96fml250mbz0p0an0f7p6zfblrpz0pn-jq-1.8.1-dev",
-        "doc": "/nix/store/k388l1qgp6dcn80njl1by9x5i2jy8i0m-jq-1.8.1-doc",
-        "man": "/nix/store/8xvsm6pzpya6jc3vfmxagxj46iz9hix9-jq-1.8.1-man",
-        "out": "/nix/store/30wa9jl18hjfi5756chyg4kl1164d5wk-jq-1.8.1"
-      },
-      "system": "x86_64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "jq",
-      "broken": false,
       "derivation": "/nix/store/9952hq9bcj0gj3xipmw3fmbsim15myk5-jq-1.8.1.drv",
       "description": "Lightweight and flexible command-line JSON processor",
       "install_id": "jq",
@@ -2461,7 +1999,8 @@
         },
         "hermes-agent": {
           "pkg-path": "flox/hermes-agent",
-          "pkg-group": "hermes-agent"
+          "pkg-group": "hermes-agent",
+          "priority": 3
         },
         "jq": {
           "pkg-path": "jq"
@@ -2479,6 +2018,12 @@
           "pkg-path": "flox/nanocoder",
           "pkg-group": "nanocoder"
         },
+        "ollama-model-resolver": {
+          "store-path": "/nix/store/8kxqskxzidwkb41nfvkbq6pi7c44an8r-ollama-model-resolver-0.4.2",
+          "systems": [
+            "x86_64-linux"
+          ]
+        },
         "openclaw": {
           "pkg-path": "flox/openclaw",
           "pkg-group": "openclaw"
@@ -2489,15 +2034,21 @@
         }
       },
       "hook": {
-        "on-activate": "  export OLLAMA_HOST=\"${OLLAMA_HOST:-127.0.0.1}\"\n  export OLLAMA_PORT=\"${OLLAMA_PORT:-11434}\"\n  export OPENAI_API_BASE=\"${OPENAI_API_BASE:-http://127.0.0.1:11434/v1}\"\n  export OPENAI_API_KEY=\"${OPENAI_API_KEY:-ollama}\"\n  export OMLX_HOST=\"${OMLX_HOST:-127.0.0.1}\"\n  export OMLX_PORT=\"${OMLX_PORT:-8000}\"\n  export LLAMACPP_PROXY_OLLAMA_LISTEN=\"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\"\n  export LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN=\"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n  export LLAMACPP_PROXY_OMLX_LISTEN=\"${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}\"\n  export LLAMACPP_PROXY_GEMINI_OMLX_LISTEN=\"${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}\"\n"
+        "on-activate": "  if [[ -f \"$FLOX_ENV/etc/agentic-bootstrap.sh\" ]]; then\n    source \"$FLOX_ENV/etc/agentic-bootstrap.sh\"\n  elif [[ -n \"${FLOX_ENV_PROJECT:-}\" && -f \"$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh\" ]]; then\n    source \"$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh\"\n  fi\n"
       },
       "profile": {
         "common": "  export PATH=\"$FLOX_ENV_PROJECT/bin:$PATH\"\n"
       },
-      "options": {},
+      "options": {
+        "systems": [
+          "aarch64-darwin",
+          "aarch64-linux",
+          "x86_64-linux"
+        ]
+      },
       "services": {
         "llamacpp-proxy-ollama": {
-          "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  _ollama=\"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\"\n  if ! curl -sf --connect-timeout 3 --max-time 5 \"http://${_ollama}/\" >/dev/null 2>&1; then\n    echo \"ollama is not reachable at ${_ollama} — start ollama before this service\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\" \\\n    --backend \"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n"
+          "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  _ollama=\"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\"\n  for _i in $(seq 1 30); do\n    curl -sf --connect-timeout 2 --max-time 3 \"http://${_ollama}/\" >/dev/null 2>&1 && break\n    sleep 1\n  done\n  if ! curl -sf --connect-timeout 3 --max-time 5 \"http://${_ollama}/\" >/dev/null 2>&1; then\n    echo \"ollama is not reachable at ${_ollama} after 30s — is it running?\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-ollama.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}\" \\\n    --backend \"${OLLAMA_HOST:-127.0.0.1}:${OLLAMA_PORT:-11434}\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}\"\n"
         },
         "llamacpp-proxy-omlx": {
           "command": "  if [[ \"$(uname -s)\" == \"Darwin\" && \"$(uname -m)\" != \"arm64\" ]]; then\n    echo \"llamacpp-proxy not supported on Intel Mac\" >&2; exit 1\n  fi\n  # Read key from omlx's own settings file (authoritative source)\n  _api_key=\"$(jq -r '.auth.api_key // empty' \"$HOME/.omlx/settings.json\" 2>/dev/null || true)\"\n  if [[ -z \"$_api_key\" ]]; then\n    echo \"Error: omlx API key not found in ~/.omlx/settings.json — is omlx running?\" >&2; exit 1\n  fi\n  model=\"$(cat \"${FLOX_ENV_CACHE}/llamacpp-proxy-omlx.model\" 2>/dev/null || true)\"\n  [[ -z \"$model\" ]] && model=\"default\"\n  exec llamacpp-proxy \\\n    --listen \"${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}\" \\\n    --backend \"${OMLX_HOST:-127.0.0.1}:${OMLX_PORT:-8000}\" \\\n    --backend-api-key \"$_api_key\" \\\n    --backend-model \"$model\" \\\n    --gemini-listen \"${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}\"\n"
@@ -2506,12 +2057,47 @@
       "include": {
         "environments": [
           {
+            "remote": "flox-labs/omlx"
+          },
+          {
             "remote": "flox-labs/ollama"
           }
         ]
       }
     },
     "include": [
+      {
+        "manifest": {
+          "schema-version": "1.11.0",
+          "install": {
+            "omlx": {
+              "pkg-path": "flox/omlx",
+              "pkg-group": "omlx",
+              "priority": 6,
+              "systems": [
+                "aarch64-darwin"
+              ]
+            }
+          },
+          "hook": {
+            "on-activate": "# Publish the service's bind address (OMLX_HOST / OMLX_PORT) and admin key\n# (OMLX_API_KEY) so consumers and interactive shells can reach it.\n# Override any value at runtime by writing to:\n#   $FLOX_ENV_CACHE/omlx.host       e.g. \"0.0.0.0\"\n#   $FLOX_ENV_CACHE/omlx.port       e.g. \"9001\"\n#   $FLOX_ENV_CACHE/omlx.api-key    enables admin endpoints when set\nexport OMLX_HOST=\"$(cat \"$FLOX_ENV_CACHE/omlx.host\" 2>/dev/null || echo 127.0.0.1)\"\nexport OMLX_PORT=\"$(cat \"$FLOX_ENV_CACHE/omlx.port\" 2>/dev/null || echo 8000)\"\nexport OMLX_API_KEY=\"$(cat \"$FLOX_ENV_CACHE/omlx.api-key\" 2>/dev/null || true)\"\n"
+          },
+          "options": {
+            "systems": [
+              "aarch64-darwin"
+            ]
+          },
+          "services": {
+            "omlx": {
+              "command": "host=\"$(cat \"$FLOX_ENV_CACHE/omlx.host\" 2>/dev/null || echo 127.0.0.1)\"\nport=\"$(cat \"$FLOX_ENV_CACHE/omlx.port\" 2>/dev/null || echo 8000)\"\nkey=\"$(cat \"$FLOX_ENV_CACHE/omlx.api-key\" 2>/dev/null || true)\"\nif [ -n \"$key\" ]; then\n  exec omlx serve --host \"$host\" --port \"$port\" --api-key \"$key\"\nelse\n  exec omlx serve --host \"$host\" --port \"$port\"\nfi\n"
+            }
+          }
+        },
+        "name": "omlx",
+        "descriptor": {
+          "remote": "flox-labs/omlx"
+        }
+      },
       {
         "manifest": {
           "schema-version": "1.11.0",
@@ -2530,7 +2116,6 @@
               "pkg-group": "ollama-darwin",
               "priority": 1,
               "systems": [
-                "x86_64-darwin",
                 "aarch64-darwin"
               ]
             }
@@ -2551,6 +2136,16 @@
         }
       }
     ],
-    "warnings": []
+    "warnings": [
+      {
+        "warning": {
+          "Overriding": [
+            "options",
+            "systems"
+          ]
+        },
+        "higher_priority_name": "Current manifest"
+      }
+    ]
   }
 }

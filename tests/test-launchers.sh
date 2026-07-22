@@ -85,10 +85,30 @@ make_fake_command() {
   chmod 755 "$path"
 }
 
+_locate_lock_helper() {
+  local h=""
+  if [[ -n "${LAUNCHER_LOCK_HELPER:-}" && -x "$LAUNCHER_LOCK_HELPER" ]]; then
+    printf '%s' "$LAUNCHER_LOCK_HELPER"; return 0
+  fi
+  for h in \
+    "$ROOT/result-launcher-lock-helper/bin/_launcher-lock-helper" \
+    "$ROOT/../agentic-scratch/result-launcher-lock-helper/bin/_launcher-lock-helper"
+  do
+    if [[ -x "$h" ]]; then printf '%s' "$h"; return 0; fi
+  done
+  h="$(command -v _launcher-lock-helper 2>/dev/null || true)"
+  if [[ -n "$h" && -x "$h" ]]; then printf '%s' "$h"; return 0; fi
+  return 1
+}
+
 copy_lock_runtime() {
-  local destination="$1"
-  cp "$ROOT"/bin/_launcher-lock-helper-* "$destination/"
-  chmod 755 "$destination"/_launcher-lock-helper-*
+  local destination="$1" src=""
+  src="$(_locate_lock_helper)" || {
+    echo "Error: no _launcher-lock-helper found (set LAUNCHER_LOCK_HELPER, build via 'flox build launcher-lock-helper', or install)" >&2
+    exit 1
+  }
+  cp "$src" "$destination/_launcher-lock-helper"
+  chmod 755 "$destination/_launcher-lock-helper"
 }
 
 WRAP="$TMP/wrap"
@@ -1061,13 +1081,13 @@ assert_eq "64" "$(bash -c 'source "$1"; key="$(launcher_profile_key a b c)"; pri
 if grep -q 'cksum' "$ROOT/bin/_launcher-common.sh"; then fail "no cksum fallback"; fi
 pass "profile keys require collision-resistant SHA-256"
 
-# 38. Native helpers are shipped for supported Linux and macOS architectures.
-for helper in \
-  _launcher-lock-helper-linux-amd64 _launcher-lock-helper-linux-arm64 \
-  _launcher-lock-helper-darwin-amd64 _launcher-lock-helper-darwin-arm64; do
-  [[ -x "$ROOT/bin/$helper" ]] || fail "missing native lock helper $helper"
-done
-pass "native kernel-lock helpers cover supported platforms"
+# 38. A single native lock helper is discoverable and executable.
+_lh38="$(_locate_lock_helper)" || fail "no _launcher-lock-helper discoverable"
+[[ -x "$_lh38" ]] || fail "discovered helper is not executable: $_lh38"
+_lh38_rc=0; "$_lh38" >/dev/null 2>&1 || _lh38_rc=$?
+[[ "$_lh38_rc" -eq 64 ]] || fail "helper does not report usage exit 64 (got $_lh38_rc)"
+pass "native kernel-lock helper is discoverable and executable"
+unset _lh38 _lh38_rc
 
 # 39. A slashless direct Codex launcher receives the key and proven model ID
 # exported by omlx_ensure_model.
@@ -1349,10 +1369,12 @@ assert_contains "$(cat "$TMP/proxy-auth-transition-listen.err")" "matches neithe
 pass "proxy transition recovery compares complete record tuples"
 
 # 50. Every shipped shell file parses.
+shopt -s nullglob
 for file in "$ROOT"/bin/*.sh "$ROOT"/bin/launch-* "$ROOT"/bin/ollama "$ROOT"/bin/omlx \
-    "$ROOT"/native/*.sh "$ROOT"/tests/*.sh; do
+    "$ROOT"/tests/*.sh; do
   bash -n "$file"
 done
+shopt -u nullglob
 pass "all shell files pass bash -n"
 
 printf '1..%d\n' "$PASS"

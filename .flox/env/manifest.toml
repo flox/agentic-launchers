@@ -2,59 +2,58 @@ schema-version = "1.12.0"
 
 
 [install]
+
+## ai coding tools
+aider-chat.pkg-path = "aider-chat"
+claude-code.pkg-path = "flox/claude-code"
+claude-code.pkg-group = "claude-code"
 codex.pkg-path = "flox/codex"
 codex.pkg-group = "codex"
 crush.pkg-path = "flox/crush"
 crush.pkg-group = "crush"
-gemini-cli.pkg-path = "flox/gemini-cli"
-gemini-cli.pkg-group = "gemini-cli"
-claude-code.pkg-path = "flox/claude-code"
-claude-code.pkg-group = "claude-code"
-opencode.pkg-path = "flox/opencode"
-opencode.pkg-group = "opencode"
 deepseek-tui.pkg-path = "flox/deepseek-tui"
 deepseek-tui.pkg-group = "deepseek-tui"
-aider-chat.pkg-path = "aider-chat"
+gemini-cli.pkg-path = "flox/gemini-cli"
+gemini-cli.pkg-group = "gemini-cli"
 hermes-agent.pkg-path = "flox/hermes-agent"
 hermes-agent.pkg-group = "hermes-agent"
 hermes-agent.priority = 3
-llamacpp-proxy.pkg-path = "flox-labs/llamacpp-proxy"
-llamacpp-proxy.pkg-group = "llamacpp-proxy"
-bash.pkg-path = "bash"
-jq.pkg-path = "jq"
-gnused.pkg-path = "gnused"
-gawk.pkg-path = "gawk"
-git.pkg-path = "git"
-gum.pkg-path = "gum"
+nanocoder.pkg-path = "flox/nanocoder"
+nanocoder.pkg-group = "nanocoder"
+openclaw.pkg-path = "flox/openclaw"
+openclaw.pkg-group = "openclaw"
+opencode.pkg-path = "flox/opencode"
+opencode.pkg-group = "opencode"
 flox-mcp-server.pkg-path = "flox/flox-mcp-server"
 flox-mcp-server.pkg-group = "flox-mcp-server"
 flox-mcp-server.systems = ["x86_64-linux", "aarch64-darwin"]
-openclaw.pkg-path = "flox/openclaw"
-openclaw.pkg-group = "openclaw"
-nanocoder.pkg-path = "flox/nanocoder"
-nanocoder.pkg-group = "nanocoder"
+
+## model serving helpers
+llamacpp-proxy.pkg-path = "flox-labs/llamacpp-proxy"
+llamacpp-proxy.pkg-group = "llamacpp-proxy"
+llamacpp-proxy.systems = ["x86_64-linux", "aarch64-linux", "aarch64-darwin"]
 ollama-model-resolver.store-path = "/nix/store/8kxqskxzidwkb41nfvkbq6pi7c44an8r-ollama-model-resolver-0.4.2"
 ollama-model-resolver.systems = ["x86_64-linux"]
-ollama-cuda.pkg-path = "flox/ollama-cuda"
-ollama-cuda.pkg-group = "ollama-cuda"
-ollama-cuda.systems = ["x86_64-linux", "aarch64-linux"]
+
+## utilities
+bash.pkg-path = "bash"
+gawk.pkg-path = "gawk"
+git.pkg-path = "git"
+gnused.pkg-path = "gnused"
+gum.pkg-path = "gum"
+jq.pkg-path = "jq"
+
 
 [vars]
 
 
 [hook]
 on-activate = '''
-  export OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-262144}"  # Default: 4096
-  export OLLAMA_HOST="127.0.0.1"
-  export OLLAMA_PORT="${OLLAMA_PORT:-11434}"
-  export OPENAI_API_BASE="${OPENAI_API_BASE:-http://127.0.0.1:11434/v1}"
-  export OPENAI_API_KEY="${OPENAI_API_KEY:-ollama}"
-  export OMLX_HOST="${OMLX_HOST:-127.0.0.1}"
-  export OMLX_PORT="${OMLX_PORT:-8000}"
-  export LLAMACPP_PROXY_OLLAMA_LISTEN="${LLAMACPP_PROXY_OLLAMA_LISTEN:-127.0.0.1:8081}"
-  export LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN="${LLAMACPP_PROXY_GEMINI_OLLAMA_LISTEN:-127.0.0.1:8082}"
-  export LLAMACPP_PROXY_OMLX_LISTEN="${LLAMACPP_PROXY_OMLX_LISTEN:-127.0.0.1:8083}"
-  export LLAMACPP_PROXY_GEMINI_OMLX_LISTEN="${LLAMACPP_PROXY_GEMINI_OMLX_LISTEN:-127.0.0.1:8084}"
+  if [[ -f "$FLOX_ENV/etc/agentic-bootstrap.sh" ]]; then
+    source "$FLOX_ENV/etc/agentic-bootstrap.sh"
+  elif [[ -n "${FLOX_ENV_PROJECT:-}" && -f "$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh" ]]; then
+    source "$FLOX_ENV_PROJECT/etc/agentic-bootstrap.sh"
+  fi
 '''
 
 
@@ -109,7 +108,7 @@ command = '''
 
 [include]
 environments = [
-#  { remote = "flox-labs/omlx" },
+  { remote = "flox-labs/omlx" },
   { remote = "flox-labs/ollama" },
 ]
 

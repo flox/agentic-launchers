@@ -195,30 +195,14 @@ launcher_write_file_if_absent() (
 )
 
 _launcher_lock_helper_path() {
-  local helper_dir="" kernel="" machine="" suffix="" helper=""
-
-  case "${BASH_SOURCE[0]}" in
-    */*) helper_dir="${BASH_SOURCE[0]%/*}" ;;
-    *) helper_dir="." ;;
-  esac
-  helper_dir="$(cd -- "$helper_dir" && pwd -P)" || return 1
-  kernel="$(uname -s 2>/dev/null)" || return 1
-  machine="$(uname -m 2>/dev/null)" || return 1
-
-  case "$kernel:$machine" in
-    Linux:x86_64|Linux:amd64) suffix="linux-amd64" ;;
-    Linux:aarch64|Linux:arm64) suffix="linux-arm64" ;;
-    Darwin:x86_64|Darwin:amd64) suffix="darwin-amd64" ;;
-    Darwin:arm64|Darwin:aarch64) suffix="darwin-arm64" ;;
-    *)
-      echo "Error: unsupported platform for launcher kernel locks: $kernel/$machine" >&2
-      return 1
-      ;;
-  esac
-
-  helper="$helper_dir/_launcher-lock-helper-$suffix"
-  if [[ ! -f "$helper" || ! -x "$helper" ]]; then
-    echo "Error: missing launcher kernel-lock helper: $helper" >&2
+  local helper=""
+  if [[ -n "${LAUNCHER_LOCK_HELPER:-}" && -x "${LAUNCHER_LOCK_HELPER}" ]]; then
+    printf '%s' "$LAUNCHER_LOCK_HELPER"
+    return 0
+  fi
+  helper="$(command -v _launcher-lock-helper 2>/dev/null)" || true
+  if [[ -z "$helper" || ! -x "$helper" ]]; then
+    echo "Error: _launcher-lock-helper not found on PATH (set LAUNCHER_LOCK_HELPER or install)" >&2
     return 1
   fi
   printf '%s' "$helper"
