@@ -20,7 +20,7 @@ stdenv.mkDerivation {
     mkdir -p "$out/bin" "$out/etc"
     cp -a bin/. "$out/bin/"
     cp -a etc/. "$out/etc/"
-    chmod 755 "$out/bin/ollama" "$out/bin/omlx" "$out/bin"/launch-*
+    chmod 755 "$out/bin/launch" "$out/bin"/launch-*
     runHook postInstall
   '';
 

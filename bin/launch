@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# launch — backend-agnostic dispatcher for the agentic-launchers suite.
+#
+# Selects the ollama or omlx backend automatically per host (overridable
+# via --backend or $AGENTIC_BACKEND), resolves trailing-'?' model names
+# for the ollama backend via ollama-model-resolver, and execs the
+# corresponding launch-<tool>[-omlx] script with the resolved args.
+#
+# Bash 3.2 compatible (macOS default). No arrays past index 32; no
+# associative arrays; empty-array expansion via ${arr[@]+"${arr[@]}"}.
+
+# Resolve BASH_SOURCE through symlinks so SCRIPT_DIR points at the physical
+# directory containing this script and its sibling launch-<tool>[-omlx] files,
+# even when `launch` was invoked via a symlink in another directory. Avoids
+# `readlink -f`, which lacks -f on macOS's built-in readlink.
+_launch_resolve_symlinks() {
+  local target="$1" link parent
+  while [[ -L "$target" ]]; do
+    link="$(readlink -- "$target")"
+    if [[ "$link" == /* ]]; then
+      target="$link"
+    else
+      parent="$(cd -- "${target%/*}" 2>/dev/null && pwd -P)"
+      target="${parent}/${link}"
+    fi
+  done
+  printf '%s' "$target"
+}
+_launch_self="$(_launch_resolve_symlinks "${BASH_SOURCE[0]}")"
+case "$_launch_self" in
+  */*) _script_parent="${_launch_self%/*}" ;;
+  *)   _script_parent="." ;;
+esac
+SCRIPT_DIR="$(cd -- "$_script_parent" && pwd -P)"
+unset _launch_self _script_parent
+unset -f _launch_resolve_symlinks
+
+# Tools per backend. OMLX_TOOLS must remain a superset of OLLAMA_TOOLS
+# (currently: adds `claude`). Both kept sorted so --list-tools output is
+# stable and _all_tools can trivially deduplicate by iterating OMLX_TOOLS.
+OLLAMA_TOOLS=(aider codex crush deepseek gemini hermes nanocoder openclaw opencode)
+OMLX_TOOLS=(aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode)
+
+_all_tools() {
+  printf '%s\n' "${OMLX_TOOLS[@]}"
+}
+
+_contains() {
+  local needle="$1"; shift
+  local item
+  for item in "$@"; do
+    [[ "$item" == "$needle" ]] && return 0
+  done
+  return 1
+}
+
+_usage() {
+  cat <<'EOF'
+Usage: launch <tool> [--model <model>] [--backend ollama|omlx] [tool args...]
+       launch --help | --list-tools
+
+Options:
+  --model, -m <model>   Model name. Trailing '?' resolves via
+                        ollama-model-resolver (ollama backend only).
+                        Examples: qwen2.5-coder, 'qwen?',
+                        mlx-community/Qwen3.5-9B-MLX-4bit
+  --backend <name>      ollama | omlx. Default: omlx on macOS/arm64,
+                        ollama elsewhere. Honors $AGENTIC_BACKEND when
+                        --backend is not given.
+
+Tools available on both backends:
+  aider, codex, crush, deepseek, gemini, hermes, nanocoder, openclaw, opencode
+
+Tools available on omlx only:
+  claude
+EOF
+}
+
+_error() {
+  echo "Error: $1" >&2
+}
+
+_detect_backend() {
+  local kernel machine
+  kernel="$(uname -s 2>/dev/null || true)"
+  machine="$(uname -m 2>/dev/null || true)"
+  if [[ "$kernel" == "Darwin" && "$machine" == "arm64" ]]; then
+    printf 'omlx'
+  else
+    printf 'ollama'
+  fi
+}
+
+# --- Argument parsing ---
+
+TOOL=""
+BACKEND=""
+BACKEND_FROM_FLAG=0
+MODEL=""
+MODEL_SET=0
+PASSTHROUGH=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      _usage
+      exit 0
+      ;;
+    --list-tools)
+      _all_tools
+      exit 0
+      ;;
+    --backend)
+      if [[ "$BACKEND_FROM_FLAG" -eq 1 ]]; then
+        _error "--backend specified more than once"
+        exit 2
+      fi
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        _error "--backend requires a value"
+        exit 2
+      fi
+      BACKEND="$2"
+      BACKEND_FROM_FLAG=1
+      shift 2
+      ;;
+    --backend=*)
+      if [[ "$BACKEND_FROM_FLAG" -eq 1 ]]; then
+        _error "--backend specified more than once"
+        exit 2
+      fi
+      BACKEND="${1#--backend=}"
+      if [[ -z "$BACKEND" ]]; then
+        _error "--backend requires a value"
+        exit 2
+      fi
+      BACKEND_FROM_FLAG=1
+      shift
+      ;;
+    --model|-m)
+      if [[ "$MODEL_SET" -eq 1 ]]; then
+        _error "$1 specified more than once"
+        exit 2
+      fi
+      if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
+        _error "$1 requires a value"
+        exit 2
+      fi
+      MODEL="$2"
+      MODEL_SET=1
+      shift 2
+      ;;
+    --model=*)
+      if [[ "$MODEL_SET" -eq 1 ]]; then
+        _error "--model specified more than once"
+        exit 2
+      fi
+      MODEL="${1#--model=}"
+      if [[ -z "$MODEL" ]]; then
+        _error "--model requires a value"
+        exit 2
+      fi
+      MODEL_SET=1
+      shift
+      ;;
+    --)
+      shift
+      PASSTHROUGH=(${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"} "$@")
+      break
+      ;;
+    -*)
+      # Flag-shaped arg before tool name is a usage error.
+      # After the tool name, forward everything as passthrough.
+      if [[ -z "$TOOL" ]]; then
+        _error "unknown option or missing tool: '$1'"
+        _usage >&2
+        exit 2
+      fi
+      PASSTHROUGH+=("$1")
+      shift
+      ;;
+    *)
+      if [[ -z "$TOOL" ]]; then
+        TOOL="$1"
+      else
+        PASSTHROUGH+=("$1")
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$TOOL" ]]; then
+  _usage >&2
+  exit 2
+fi
+
+# --- Backend resolution ---
+
+if [[ -z "$BACKEND" ]]; then
+  if [[ -n "${AGENTIC_BACKEND:-}" ]]; then
+    BACKEND="$AGENTIC_BACKEND"
+  else
+    BACKEND="$(_detect_backend)"
+  fi
+fi
+
+case "$BACKEND" in
+  ollama|omlx) ;;
+  *)
+    _error "invalid backend '$BACKEND' (expected: ollama | omlx)"
+    exit 2
+    ;;
+esac
+
+# --- Tool validity ---
+
+if [[ "$BACKEND" == "ollama" ]]; then
+  if ! _contains "$TOOL" ${OLLAMA_TOOLS[@]+"${OLLAMA_TOOLS[@]}"}; then
+    if _contains "$TOOL" ${OMLX_TOOLS[@]+"${OMLX_TOOLS[@]}"}; then
+      _error "'$TOOL' requires the omlx backend (retry with: --backend omlx)"
+    else
+      _error "unknown tool '$TOOL'"
+      echo "Tools: $(_all_tools | paste -sd, - | sed 's/,/, /g')" >&2
+    fi
+    exit 2
+  fi
+else
+  if ! _contains "$TOOL" ${OMLX_TOOLS[@]+"${OMLX_TOOLS[@]}"}; then
+    _error "unknown tool '$TOOL'"
+    echo "Tools: $(_all_tools | paste -sd, - | sed 's/,/, /g')" >&2
+    exit 2
+  fi
+fi
+
+# --- Model '?' resolution ---
+
+if [[ "$MODEL_SET" -eq 1 && "$MODEL" == *'?' ]]; then
+  if [[ "$BACKEND" != "ollama" ]]; then
+    _error "trailing-'?' model resolution requires the ollama backend (got: $BACKEND)"
+    exit 2
+  fi
+  if ! command -v ollama-model-resolver >/dev/null 2>&1; then
+    _error "trailing-'?' requires ollama-model-resolver on PATH"
+    exit 2
+  fi
+  MODEL="$(ollama-model-resolver resolve "$MODEL" --quiet)" || exit $?
+fi
+
+# --- Dispatch ---
+
+if [[ "$BACKEND" == "omlx" ]]; then
+  target="$SCRIPT_DIR/launch-${TOOL}-omlx"
+else
+  target="$SCRIPT_DIR/launch-${TOOL}"
+fi
+
+if [[ ! -x "$target" ]]; then
+  _error "internal: launcher not found or not executable: $target"
+  exit 127
+fi
+
+if [[ "$MODEL_SET" -eq 1 ]]; then
+  exec "$target" --model "$MODEL" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+else
+  exec "$target" ${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}
+fi

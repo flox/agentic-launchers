@@ -112,106 +112,202 @@ copy_lock_runtime() {
 }
 
 WRAP="$TMP/wrap"
-BACKEND="$TMP/backend"
-NO_BACKEND="$TMP/no-backend"
-mkdir -p "$WRAP" "$BACKEND" "$NO_BACKEND"
-cp "$ROOT/bin/ollama" "$WRAP/ollama"
-cp "$ROOT/bin/omlx" "$WRAP/omlx"
-chmod 755 "$WRAP/ollama" "$WRAP/omlx"
+RESOLVER="$TMP/resolver"
+NO_RESOLVER="$TMP/no-resolver"
+mkdir -p "$WRAP" "$RESOLVER" "$NO_RESOLVER"
+cp "$ROOT/bin/launch" "$WRAP/launch"
+chmod 755 "$WRAP/launch"
 
-for tool in gemini codex crush deepseek aider nanocoder openclaw opencode hermes; do
+# Fake launch-<tool>[-omlx] for every advertised tool. Each prints
+# "launcher:<name>" followed by "<arg>" per received arg, so tests can
+# assert both which launcher was dispatched and what was forwarded.
+for tool in aider codex crush deepseek gemini hermes nanocoder openclaw opencode; do
   make_fake_command "$WRAP/launch-$tool" \
     'printf "launcher:%s" "${0##*/}"' \
     'for arg in "$@"; do printf " <%s>" "$arg"; done' \
     'printf "\\n"'
 done
-for tool in gemini deepseek aider claude hermes crush opencode codex openclaw nanocoder; do
+for tool in aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode; do
   make_fake_command "$WRAP/launch-$tool-omlx" \
     'printf "launcher:%s" "${0##*/}"' \
     'for arg in "$@"; do printf " <%s>" "$arg"; done' \
     'printf "\\n"'
 done
 
-make_fake_command "$BACKEND/ollama" \
-  'printf "real-ollama"' \
-  'for arg in "$@"; do printf " <%s>" "$arg"; done' \
-  'printf "\\n"'
-make_fake_command "$BACKEND/omlx" \
-  'printf "real-omlx"' \
-  'for arg in "$@"; do printf " <%s>" "$arg"; done' \
-  'printf "\\n"'
-make_fake_command "$BACKEND/ollama-model-resolver" \
+# Resolver fake for the '?' resolution tests. Trims the trailing '?' and
+# appends -resolved so an input like alpha? becomes alpha-resolved.
+make_fake_command "$RESOLVER/ollama-model-resolver" \
   '[[ "${1:-}" == "resolve" ]] || exit 3' \
   'value="${2:-}"' \
-  'printf "%s-resolved\\n" "${value%?}"'
+  'printf "%s-resolved" "${value%?}"'
 
-# 1. Bare launch is a clear usage error, not a set -e shift abort.
+# Convenience: default test PATH (with resolver on it).
+LAUNCH_PATH="$WRAP:$RESOLVER:/usr/bin:/bin"
+# PATH without the resolver, for "resolver-not-on-PATH" tests.
+LAUNCH_PATH_NORES="$WRAP:$NO_RESOLVER:/usr/bin:/bin"
+
+# 1. Bare `launch` is a usage error, not a silent shift abort.
 set +e
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch 2>&1)"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" 2>&1)"
 status=$?
 set -e
-assert_eq "2" "$status" "bare ollama launch exits 2"
-assert_contains "$out" "Usage: ollama launch <tool>" "bare ollama launch prints usage"
-pass "bare ollama launch is explicit"
+assert_eq "2" "$status" "bare launch exits 2"
+assert_contains "$out" "Usage: launch <tool>" "bare launch prints usage to stderr"
+pass "bare launch is a usage error"
 
-# 2. Missing backends produce one wrapper diagnostic, never exec-empty noise.
+# 2. --help and --list-tools succeed and produce expected content.
 set +e
-out="$(PATH="$WRAP:$NO_BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" list 2>&1)"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --help)"
 status=$?
 set -e
-assert_eq "1" "$status" "missing ollama backend exits 1"
-assert_eq "Error: cannot find ollama binary" "$out" "missing ollama backend has one error"
+assert_eq "0" "$status" "--help exits 0"
+assert_contains "$out" "Usage: launch <tool>" "--help prints usage"
+assert_contains "$out" "omlx only" "--help mentions omlx-only tools"
 set +e
-out="$(PATH="$WRAP:$NO_BACKEND:/usr/bin:/bin" bash "$WRAP/omlx" list 2>&1)"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --list-tools)"
 status=$?
 set -e
-assert_eq "1" "$status" "missing omlx backend exits 1"
-assert_eq "Error: cannot find omlx binary" "$out" "missing omlx backend has one error"
-pass "missing backend errors are singular"
+assert_eq "0" "$status" "--list-tools exits 0"
+expected_list=$'aider\nclaude\ncodex\ncrush\ndeepseek\ngemini\nhermes\nnanocoder\nopenclaw\nopencode'
+assert_eq "$expected_list" "$out" "--list-tools prints 10 tools alphabetically"
+pass "help and list-tools work"
 
-# 3. Ordinary and unknown-tool passthrough reaches the real backend.
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" list --json)"
-assert_eq "real-ollama <list> <--json>" "$out" "ollama passthrough"
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch native-tool --x)"
-assert_eq "real-ollama <launch> <native-tool> <--x>" "$out" "unknown launch passthrough"
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/omlx" launch native-tool --x)"
-assert_eq "real-omlx <launch> <native-tool> <--x>" "$out" "omlx unknown launch passthrough"
-pass "real backend passthrough is preserved"
+# 3. Unknown tool and leading-dash pseudo-tool are rejected with usage help.
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" bogus 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "unknown tool exits 2"
+assert_contains "$out" "unknown tool 'bogus'" "unknown tool diagnosed"
+assert_contains "$out" "aider" "unknown tool error lists tools"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" -bogus 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "leading-dash tool exits 2"
+assert_contains "$out" "unknown option or missing tool" "leading-dash tool diagnosed"
+pass "unknown and leading-dash tool names are rejected"
 
-# 4. Dedicated launchers and executable aliases dispatch correctly.
-for spec in 'openclaw:launch-openclaw' 'opencode:launch-opencode' 'hermes:launch-hermes' 'hermes-agent:launch-hermes'; do
-  tool="${spec%%:*}"
-  expected="${spec#*:}"
-  out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch "$tool" --model alpha)"
-  assert_eq "launcher:${expected} <--model> <alpha>" "$out" "dispatch $tool"
+# 4. Linux default backend dispatches every ollama-side tool.
+for tool in aider codex crush deepseek gemini hermes nanocoder openclaw opencode; do
+  out="$(AGENTIC_BACKEND="" PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama "$tool" --model alpha)"
+  assert_eq "launcher:launch-${tool} <--model> <alpha>" "$out" "dispatch --backend ollama $tool"
 done
-pass "ollama dedicated launcher coverage is complete"
+pass "ollama backend dispatches every ollama-side tool"
 
-# 5. Resolver preprocessing works and malformed model options fail early.
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch codex --model 'alpha?' --flag)"
-assert_eq "launcher:launch-codex <--model> <alpha-resolved> <--flag>" "$out" "question-mark resolver"
+# 5. Explicit --backend, --backend=, $AGENTIC_BACKEND, and flag-beats-env
+# all route to the omlx launchers.
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend omlx gemini --model alpha)"
+assert_eq "launcher:launch-gemini-omlx <--model> <alpha>" "$out" "--backend omlx"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend=omlx gemini --model alpha)"
+assert_eq "launcher:launch-gemini-omlx <--model> <alpha>" "$out" "--backend=omlx"
+out="$(AGENTIC_BACKEND=omlx PATH="$LAUNCH_PATH" bash "$WRAP/launch" gemini --model alpha)"
+assert_eq "launcher:launch-gemini-omlx <--model> <alpha>" "$out" "AGENTIC_BACKEND=omlx"
+out="$(AGENTIC_BACKEND=omlx PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model alpha)"
+assert_eq "launcher:launch-gemini <--model> <alpha>" "$out" "--backend flag wins over AGENTIC_BACKEND"
+pass "backend override paths dispatch to the requested backend"
+
+# 6. --backend value validation: invalid name, repeated flag, missing value.
 set +e
-out="$(PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch codex --model --flag 2>&1)"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend nope gemini 2>&1)"
 status=$?
 set -e
-assert_eq "2" "$status" "model option followed by flag exits 2"
-assert_contains "$out" "requires a model value" "model option followed by flag is diagnosed"
+assert_eq "2" "$status" "invalid backend exits 2"
+assert_contains "$out" "invalid backend 'nope'" "invalid backend diagnosed"
 set +e
-PATH="$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" launch codex -m >/dev/null 2>&1
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend omlx --backend ollama gemini 2>&1)"
 status=$?
 set -e
-assert_eq "2" "$status" "trailing -m exits 2"
-pass "model resolver state machine rejects missing values"
+assert_eq "2" "$status" "repeated --backend exits 2"
+assert_contains "$out" "specified more than once" "repeated --backend diagnosed"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "--backend without value exits 2"
+assert_contains "$out" "--backend requires a value" "missing backend value diagnosed"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend= gemini 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "--backend= (empty) exits 2"
+pass "backend flag validation covers all invalid forms"
 
-# 6. Symlink aliases to the wrapper are skipped during real-binary resolution.
+# 7. Tool-backend guards: claude+ollama rejected; omlx accepts every tool
+# including claude.
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama claude --model alpha 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "claude+ollama exits 2"
+assert_contains "$out" "requires the omlx backend" "claude+ollama diagnosed"
+for tool in aider claude codex crush deepseek gemini hermes nanocoder openclaw opencode; do
+  out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend omlx "$tool" --model alpha)"
+  assert_eq "launcher:launch-${tool}-omlx <--model> <alpha>" "$out" "omlx dispatches $tool"
+done
+pass "claude requires omlx and omlx accepts every advertised tool"
+
+# 8. --model / -m validation: missing value, flag-shaped value, repeated.
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "--model without value exits 2"
+assert_contains "$out" "requires a value" "missing --model value diagnosed"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini -m 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "-m without value exits 2"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model --other 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "--model with flag-shaped value exits 2"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model a --model b 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "--model twice exits 2"
+assert_contains "$out" "specified more than once" "repeated --model diagnosed"
+pass "model flag validation covers all invalid forms"
+
+# 9. Passthrough args (positional and flag-shaped, before and after --)
+# reach the dispatched launcher in order.
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model alpha foo --bar baz)"
+assert_eq "launcher:launch-gemini <--model> <alpha> <foo> <--bar> <baz>" "$out" "positional and flag passthrough"
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama gemini --model alpha -- --dashed --arg)"
+assert_eq "launcher:launch-gemini <--model> <alpha> <--dashed> <--arg>" "$out" "-- forwards dashed args"
+pass "extra args forward to the underlying launcher in order"
+
+# 10. '?' resolution: rewritten for ollama, rejected for omlx, and requires
+# the resolver on PATH.
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend ollama codex --model 'alpha?' --flag)"
+assert_eq "launcher:launch-codex <--model> <alpha-resolved> <--flag>" "$out" "'?' resolved for ollama"
+set +e
+out="$(PATH="$LAUNCH_PATH" bash "$WRAP/launch" --backend omlx gemini --model 'alpha?' 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "'?' with omlx exits 2"
+assert_contains "$out" "requires the ollama backend" "'?' with omlx diagnosed"
+set +e
+out="$(PATH="$LAUNCH_PATH_NORES" bash "$WRAP/launch" --backend ollama codex --model 'alpha?' 2>&1)"
+status=$?
+set -e
+assert_eq "2" "$status" "'?' with no resolver exits 2"
+assert_contains "$out" "ollama-model-resolver" "missing resolver diagnosed"
+pass "'?' resolution and its guards"
+
+# 11. launch reached via a symlink still resolves SCRIPT_DIR to the real
+# directory and finds sibling launchers.
 ALIAS="$TMP/alias"
 mkdir -p "$ALIAS"
-ln -s "$WRAP/ollama" "$ALIAS/ollama"
-out="$(PATH="$ALIAS:$WRAP:$BACKEND:/usr/bin:/bin" bash "$WRAP/ollama" ps)"
-assert_eq "real-ollama <ps>" "$out" "symlink self detection"
-pass "real-binary lookup cannot bounce through a wrapper symlink"
+ln -s "$WRAP/launch" "$ALIAS/launch"
+out="$(PATH="$LAUNCH_PATH" bash "$ALIAS/launch" --backend ollama gemini --model alpha)"
+assert_eq "launcher:launch-gemini <--model> <alpha>" "$out" "symlinked launch dispatches"
+pass "launch reached via symlink resolves SCRIPT_DIR safely"
 
-# 7. Direct launchers accept -m and --model= without losing backend URL state.
+# 12. Direct launchers accept -m and --model= without losing backend URL state.
 DIRECT="$TMP/direct"
 DIRECT_BIN="$TMP/direct-bin"
 mkdir -p "$DIRECT" "$DIRECT_BIN" "$TMP/cache"
@@ -231,7 +327,7 @@ out="$(FLOX_ENV_CACHE="$TMP/cache" PATH="$DIRECT_BIN:/usr/bin:/bin" bash "$DIREC
 assert_eq "base=http://127.0.0.1:11434/v1 key=ollama <--model> <beta>" "$out" "direct --model="
 pass "dedicated launchers accept all advertised model forms"
 
-# 8. OLLAMA_HOST normalization preserves schemes, paths, and IPv6.
+# 13. OLLAMA_HOST normalization preserves schemes, paths, and IPv6.
 normalize_ollama() {
   OLLAMA_HOST="$1" OLLAMA_PORT="${2:-}" bash -c '
     source "$1"
@@ -252,7 +348,7 @@ set -e
 assert_eq "1" "$status" "zero Ollama port rejected"
 pass "OLLAMA_HOST is normalized as a complete URL"
 
-# 9. Concurrent Ollama ensures serialize the same endpoint/model pull.
+# 14. Concurrent Ollama ensures serialize the same endpoint/model pull.
 OLLAMA_RACE_BIN="$TMP/ollama-race-bin"
 OLLAMA_RACE_DIR="$TMP/ollama-race"
 OLLAMA_RACE_CACHE="$TMP/ollama-race-cache"
@@ -289,7 +385,7 @@ wait "$or2"
 assert_file_eq "1" "$OLLAMA_RACE_DIR/pull-count" "one Ollama pull request"
 pass "concurrent Ollama ensures issue one pull"
 
-# 10. A crash-surviving Ollama pull intent fails closed while absent and clears
+# 15. A crash-surviving Ollama pull intent fails closed while absent and clears
 # itself after the requested model becomes visible, without a duplicate POST.
 OLLAMA_INTENT_BIN="$TMP/ollama-intent-bin"
 OLLAMA_INTENT_CACHE="$TMP/ollama-intent-cache"
@@ -334,7 +430,7 @@ PROXY_BIN="$TMP/proxy-bin"
 mkdir -p "$PROXY_BIN"
 make_fake_command "$PROXY_BIN/sync" ':'
 
-# 11. A durable incomplete proxy transition always forces recovery restart.
+# 16. A durable incomplete proxy transition always forces recovery restart.
 PROXY_CACHE="$TMP/proxy-crash-cache"
 PROXY_CURRENT="$TMP/proxy-crash-current"
 PROXY_RESTARTS="$TMP/proxy-crash-restarts"
@@ -358,7 +454,7 @@ assert_eq "2:new-model" "$(jq -r '"\(.version):\(.model)"' "$PROXY_CACHE/proxy.m
 [[ ! -e "$PROXY_CACHE/proxy.model.transition" ]] || fail "proxy transition marker removed"
 pass "proxy transitions recover crash-consistently"
 
-# 12. Desired state plus health is not accepted when committed state disagrees.
+# 17. Desired state plus health is not accepted when committed state disagrees.
 PROXY_CACHE2="$TMP/proxy-disagree-cache"
 PROXY_CURRENT2="$TMP/proxy-disagree-current"
 PROXY_RESTARTS2="$TMP/proxy-disagree-restarts"
@@ -377,7 +473,7 @@ assert_file_eq "1" "$PROXY_RESTARTS2" "disagreeing committed state restarted"
 assert_file_eq "new-model" "$PROXY_CURRENT2" "desired state applied"
 pass "proxy desired state is never mistaken for observed state"
 
-# 13. Proxy transitions are serialized across concurrent model switches.
+# 18. Proxy transitions are serialized across concurrent model switches.
 PROXY_CACHE3="$TMP/proxy-concurrent-cache"
 PROXY_LOG3="$TMP/proxy-concurrent.log"
 PROXY_CURRENT3="$TMP/proxy-concurrent.current"
@@ -409,7 +505,7 @@ assert_eq "end:${first#start:}" "$second" "first proxy transaction contiguous"
 assert_eq "end:${third#start:}" "$fourth" "second proxy transaction contiguous"
 pass "proxy model switches are serialized"
 
-# 14. Failed proxy switches restore the last durably committed state.
+# 19. Failed proxy switches restore the last durably committed state.
 ROLL_CACHE="$TMP/proxy-roll-cache"
 ROLL_CURRENT="$TMP/proxy-roll-current"
 ROLL_LOG="$TMP/proxy-roll.log"
@@ -443,7 +539,7 @@ assert_eq $'bad\nold' "$(cat "$ROLL_LOG")" "rollback restart sequence"
 assert_contains "$(cat "$TMP/proxy-roll.err")" "was restored" "rollback diagnostic is accurate"
 pass "proxy rollback is checked and accurately reported"
 
-# 15. Proxy service restart has a bounded execution deadline.
+# 20. Proxy service restart has a bounded execution deadline.
 TIMEOUT_CACHE="$TMP/proxy-timeout-cache"
 TIMEOUT_BIN="$TMP/proxy-timeout-bin"
 mkdir -p "$TIMEOUT_CACHE" "$TIMEOUT_BIN"
@@ -473,7 +569,7 @@ assert_not_live "$timeout_parent" "timed-out restart parent remained live"
 assert_not_live "$timeout_child" "timed-out restart descendant remained live"
 pass "proxy restarts cannot block indefinitely or leak descendants"
 
-# 16. Atomic publication never exposes mixed config content.
+# 21. Atomic publication never exposes mixed config content.
 ATOMIC_DIR="$TMP/atomic"
 mkdir -p "$ATOMIC_DIR"
 awk 'BEGIN { for (i=0; i<20000; i++) printf "A" }' > "$ATOMIC_DIR/a"
@@ -487,7 +583,7 @@ for _ in 1 2 3 4 5; do
 done
 pass "config publication is atomic under contention"
 
-# 17. Atomic writers reject pre-existing symlinks and directories.
+# 22. Atomic writers reject pre-existing symlinks and directories.
 GUARD_DIR="$TMP/guard"
 mkdir -p "$GUARD_DIR/config-dir"
 printf '%s' original > "$GUARD_DIR/victim"
@@ -505,7 +601,7 @@ assert_eq "1" "$link_status" "symlink target rejection"
 assert_file_eq "original" "$GUARD_DIR/victim" "symlink target untouched"
 pass "config publication rejects redirected targets"
 
-# 18. Atomic replacement uses the native rename helper, not command-line mv
+# 23. Atomic replacement uses the native rename helper, not command-line mv
 # directory semantics. A hostile mv shim must never be reached.
 MV_RACE_BIN="$TMP/mv-race-bin"
 MV_RACE_DIR="$TMP/mv-race"
@@ -528,7 +624,7 @@ assert_file_eq "new" "$MV_RACE_DIR/target" "native rename publication content"
 assert_file_eq "0" "$MV_RACE_CALLS" "command-line mv was not invoked"
 pass "atomic writer publishes through descriptor-bound native rename"
 
-# 19. Same-model OpenCode launches at different Ollama endpoints do not collide.
+# 24. Same-model OpenCode launches at different Ollama endpoints do not collide.
 PROFILE_DIRECT="$TMP/profile-direct"
 PROFILE_BIN="$TMP/profile-bin"
 PROFILE_CACHE="$TMP/profile-cache"
@@ -559,7 +655,7 @@ two_root="${two#root=}"; two_root="${two_root%% base=*}"
 assert_eq "2" "$(find "$PROFILE_CACHE/opencode-profiles" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" "two endpoint profiles"
 pass "Ollama profiles bind complete endpoint configuration"
 
-# 20. Same-model OpenCode launches at different oMLX endpoints do not collide.
+# 25. Same-model OpenCode launches at different oMLX endpoints do not collide.
 OMLX_PROFILE_DIRECT="$TMP/omlx-profile-direct"
 OMLX_PROFILE_BIN="$TMP/omlx-profile-bin"
 OMLX_PROFILE_CACHE="$TMP/omlx-profile-cache"
@@ -600,7 +696,7 @@ omlx_two_root="${omlx_two#root=}"; omlx_two_root="${omlx_two_root%% base=*}"
 [[ "$omlx_one_root" != "$omlx_two_root" ]] || fail "oMLX endpoint profile roots differ"
 pass "oMLX profiles bind endpoint and credential identity"
 
-# 21. Every model-specific profile key includes all configuration dependencies.
+# 26. Every model-specific profile key includes all configuration dependencies.
 grep -F 'launcher_profile_key "opencode-ollama" "$MODEL" "$OLLAMA_BASE_URL"' "$ROOT/bin/launch-opencode" >/dev/null
 grep -F 'launcher_profile_key "openclaw-ollama" "$MODEL" "$OLLAMA_BASE_URL"' "$ROOT/bin/launch-openclaw" >/dev/null
 grep -F 'launcher_profile_key "crush-ollama" "$MODEL" "$OLLAMA_BASE_URL" "$PROXY_BASE_URL"' "$ROOT/bin/launch-crush" >/dev/null
@@ -610,7 +706,7 @@ grep -F 'launcher_profile_key "openclaw-omlx" "$MODEL" "$OMLX_MODEL_ID" "$OMLX_B
 grep -F 'launcher_profile_key "crush-omlx" "$MODEL" "$OMLX_MODEL_ID" "$OMLX_BASE_URL" "$OMLX_API_KEY"' "$ROOT/bin/launch-crush-omlx" >/dev/null
 pass "profile identity covers model, endpoint, proxy, and credential inputs"
 
-# 22. oMLX model discovery distinguishes absent, unreachable, and malformed.
+# 27. oMLX model discovery distinguishes absent, unreachable, and malformed.
 OMLX_STATUS_BIN="$TMP/omlx-status-bin"
 mkdir -p "$OMLX_STATUS_BIN"
 make_fake_command "$OMLX_STATUS_BIN/curl" \
@@ -640,7 +736,7 @@ assert_eq "3" "$malformed_status" "oMLX malformed status"
 assert_eq "2" "$unreachable_status" "oMLX unreachable status"
 pass "oMLX model discovery has explicit result classes"
 
-# 23. oMLX admin-login transport failures produce an actionable diagnostic.
+# 28. oMLX admin-login transport failures produce an actionable diagnostic.
 OMLX_FAIL_BIN="$TMP/omlx-fail-bin"
 OMLX_FAIL_CACHE="$TMP/omlx-fail-cache"
 mkdir -p "$OMLX_FAIL_BIN" "$OMLX_FAIL_CACHE"
@@ -663,7 +759,7 @@ assert_contains "$(cat "$TMP/omlx-login.err")" "could not contact the oMLX admin
 assert_contains "$(cat "$TMP/omlx-login.err")" "connection refused" "oMLX curl detail preserved"
 pass "oMLX admin-login failures are never silent"
 
-# 24. A completed oMLX task cannot succeed before the model is visible.
+# 29. A completed oMLX task cannot succeed before the model is visible.
 OMLX_ABSENT_BIN="$TMP/omlx-absent-bin"
 OMLX_ABSENT_CACHE="$TMP/omlx-absent-cache"
 mkdir -p "$OMLX_ABSENT_BIN" "$OMLX_ABSENT_CACHE"
@@ -689,7 +785,7 @@ assert_eq "1" "$status" "completed but absent model fails"
 assert_contains "$(cat "$TMP/omlx-absent.err")" "never appeared in /v1/models" "absent postcondition diagnostic"
 pass "oMLX completion is verified against model discovery"
 
-# 25. oMLX succeeds after task completion and delayed model registration.
+# 30. oMLX succeeds after task completion and delayed model registration.
 OMLX_VISIBLE_BIN="$TMP/omlx-visible-bin"
 OMLX_VISIBLE_CACHE="$TMP/omlx-visible-cache"
 OMLX_VISIBLE_STATE="$TMP/omlx-visible-state"
@@ -712,7 +808,7 @@ FLOX_ENV_CACHE="$OMLX_VISIBLE_CACHE" OMLX_MODEL_VISIBLE_TIMEOUT_SECONDS=2 OMLX_M
   >"$TMP/omlx-visible.out" 2>"$TMP/omlx-visible.err"
 pass "oMLX ensure waits through delayed registration"
 
-# 26. Concurrent oMLX ensures for one endpoint/model submit one download.
+# 31. Concurrent oMLX ensures for one endpoint/model submit one download.
 OMLX_LOCK_BIN="$TMP/omlx-lock-bin"
 OMLX_LOCK_CACHE="$TMP/omlx-lock-cache"
 OMLX_LOCK_STATE="$TMP/omlx-lock-state"
@@ -745,7 +841,7 @@ wait "$ol1"; wait "$ol2"
 assert_file_eq "1" "$OMLX_DOWNLOAD_COUNT" "one oMLX download request"
 pass "concurrent oMLX ensures are endpoint-and-model idempotent"
 
-# 27. Interrupting an active oMLX download cancels the server task and unlocks.
+# 32. Interrupting an active oMLX download cancels the server task and unlocks.
 OMLX_CANCEL_BIN="$TMP/omlx-cancel-bin"
 OMLX_CANCEL_CACHE="$TMP/omlx-cancel-cache"
 OMLX_CANCEL_STARTED="$TMP/omlx-cancel-started"
@@ -796,7 +892,7 @@ bash -c '
 assert_eq "0" "$(find "$OMLX_CANCEL_CACHE" -name '*.task' -type f | wc -l | tr -d ' ')" "cancelled task journal cleared"
 pass "oMLX interruption cancels active server work and releases kernel authority"
 
-# 28. A durable active-task journal resumes after launcher death without a
+# 33. A durable active-task journal resumes after launcher death without a
 # duplicate POST, and is cleared only after the model becomes visible.
 OMLX_RECOVER_BIN="$TMP/omlx-recover-bin"
 OMLX_RECOVER_CACHE="$TMP/omlx-recover-cache"
@@ -829,7 +925,7 @@ assert_file_eq "0" "$OMLX_RECOVER_POSTS" "recovered task issued no duplicate POS
 [[ ! -e "$recover_marker" ]] || fail "recovered task journal cleared after visibility"
 pass "oMLX active-task journals resume crash-consistently"
 
-# 29. An intent journal without a task ID represents an indeterminate remote
+# 34. An intent journal without a task ID represents an indeterminate remote
 # outcome and must fail closed rather than submit a second download.
 OMLX_INTENT_BIN="$TMP/omlx-intent-bin"
 OMLX_INTENT_CACHE="$TMP/omlx-intent-cache"
@@ -870,7 +966,7 @@ FLOX_ENV_CACHE="$OMLX_INTENT_CACHE" PATH="$OMLX_INTENT_BIN:/usr/bin:/bin" \
 assert_file_eq "0" "$OMLX_INTENT_POSTS" "visible recovery issued no duplicate POST"
 pass "oMLX unknown request outcomes never duplicate downloads"
 
-# 30. A kernel lock is retained after the acquisition helper exits and blocks a
+# 35. A kernel lock is retained after the acquisition helper exits and blocks a
 # concurrent owner until the Bash descriptor is closed.
 KERNEL_LOCK_DIR="$TMP/kernel-lock-basic"
 mkdir -p "$KERNEL_LOCK_DIR"
@@ -905,7 +1001,7 @@ bash -c '
 ' _ "$ROOT/bin/_launcher-common.sh" "$KERNEL_LOCK_DIR/test.lock"
 pass "kernel lock authority survives helper exit and serializes owners"
 
-# 31. SIGKILL of an owner with no protected child closes the descriptor in the
+# 36. SIGKILL of an owner with no protected child closes the descriptor in the
 # kernel. There is no heartbeat process and no stale object to reclaim.
 HARD_KILL_DIR="$TMP/kernel-lock-hard-kill"
 mkdir -p "$HARD_KILL_DIR"
@@ -938,7 +1034,7 @@ hard_inode_after="$(stat -c %i "$HARD_KILL_DIR/test.lock" 2>/dev/null || stat -f
 assert_eq "$hard_inode_before" "$hard_inode_after" "persistent lock inode survives hard-kill handoff"
 pass "hard-killed owners release kernel authority without heartbeats"
 
-# 32. If a protected child survives its Bash owner, its inherited descriptor
+# 37. If a protected child survives its Bash owner, its inherited descriptor
 # keeps the lock until that operation actually ends. Recovery cannot overlap it.
 INHERIT_DIR="$TMP/kernel-lock-inherited-child"
 mkdir -p "$INHERIT_DIR"
@@ -976,7 +1072,7 @@ bash -c '
 ' _ "$ROOT/bin/_launcher-common.sh" "$INHERIT_DIR/test.lock"
 pass "surviving protected children retain authority until completion"
 
-# 33. Multiple contenders arriving after a hard crash serialize through the
+# 38. Multiple contenders arriving after a hard crash serialize through the
 # same persistent inode; no two critical sections can be live simultaneously.
 MULTI_DIR="$TMP/kernel-lock-multi"
 mkdir -p "$MULTI_DIR"
@@ -1012,7 +1108,7 @@ wait "$multi_a"; wait "$multi_b"
 [[ ! -e "$MULTI_DIR/overlap" ]] || fail "concurrent kernel-lock owners overlapped"
 pass "concurrent post-crash contenders preserve mutual exclusion"
 
-# 34. Release never unlinks the lock pathname. Even an rm implementation that
+# 39. Release never unlinks the lock pathname. Even an rm implementation that
 # refuses that path cannot strand authority or change the lock inode.
 NO_UNLINK_BIN="$TMP/no-unlink-bin"
 NO_UNLINK_DIR="$TMP/no-unlink-lock"
@@ -1030,7 +1126,7 @@ PATH="$NO_UNLINK_BIN:/usr/bin:/bin" bash -c '
 [[ -f "$NO_UNLINK_DIR/test.lock" ]] || fail "persistent lock inode retained"
 pass "lock release is descriptor-based and cannot orphan a pathname"
 
-# 35. If ownership state is corrupted and the retained descriptor is already
+# 40. If ownership state is corrupted and the retained descriptor is already
 # gone, release reports failure and preserves its globals for diagnosis.
 RELEASE_FAIL_DIR="$TMP/release-failure"
 mkdir -p "$RELEASE_FAIL_DIR"
@@ -1057,7 +1153,7 @@ assert_contains "$out" "file=$RELEASE_FAIL_DIR/test.lock" "release failure prese
 assert_contains "$(cat "$RELEASE_FAIL_DIR/err")" "no longer open" "release failure diagnostic"
 pass "lock release failures are explicit and retain ownership state"
 
-# 36. Native acquisition rejects symlink and non-regular lock objects without
+# 41. Native acquisition rejects symlink and non-regular lock objects without
 # modifying the symlink target.
 LOCK_GUARD_DIR="$TMP/lock-target-guard"
 mkdir -p "$LOCK_GUARD_DIR/directory-lock"
@@ -1076,12 +1172,12 @@ assert_eq "1" "$directory_status" "directory lock target rejected"
 assert_file_eq "untouched" "$LOCK_GUARD_DIR/victim" "symlink lock target not modified"
 pass "kernel lock acquisition binds a regular non-symlink inode"
 
-# 37. Profile hashing has no non-cryptographic fallback.
+# 42. Profile hashing has no non-cryptographic fallback.
 assert_eq "64" "$(bash -c 'source "$1"; key="$(launcher_profile_key a b c)"; printf "%s" "${#key}"' _ "$ROOT/bin/_launcher-common.sh")" "SHA-256 key length"
 if grep -q 'cksum' "$ROOT/bin/_launcher-common.sh"; then fail "no cksum fallback"; fi
 pass "profile keys require collision-resistant SHA-256"
 
-# 38. A single native lock helper is discoverable and executable.
+# 43. A single native lock helper is discoverable and executable.
 _lh38="$(_locate_lock_helper)" || fail "no _launcher-lock-helper discoverable"
 [[ -x "$_lh38" ]] || fail "discovered helper is not executable: $_lh38"
 _lh38_rc=0; "$_lh38" >/dev/null 2>&1 || _lh38_rc=$?
@@ -1089,7 +1185,7 @@ _lh38_rc=0; "$_lh38" >/dev/null 2>&1 || _lh38_rc=$?
 pass "native kernel-lock helper is discoverable and executable"
 unset _lh38 _lh38_rc
 
-# 39. A slashless direct Codex launcher receives the key and proven model ID
+# 44. A slashless direct Codex launcher receives the key and proven model ID
 # exported by omlx_ensure_model.
 CODEX_DIRECT="$TMP/codex-direct"
 CODEX_BIN="$TMP/codex-bin"
@@ -1123,7 +1219,7 @@ for launcher in "$ROOT"/bin/launch-*; do
 done
 pass "direct launchers resolve helpers slashlessly and export Codex credentials"
 
-# 40. Same-model proxy requests with a changed upstream identity restart once,
+# 45. Same-model proxy requests with a changed upstream identity restart once,
 # while an identical repeated configuration remains a no-op.
 PROXY_ID_BIN="$TMP/proxy-id-bin"
 PROXY_ID_CACHE="$TMP/proxy-id-cache"
@@ -1148,7 +1244,7 @@ assert_eq $'http://endpoint-a:11434\nhttp://endpoint-b:11434' "$(cat "$PROXY_ID_
 [[ "$first_proxy_identity" != "$second_proxy_identity" ]] || fail "proxy identity binds upstream endpoint"
 pass "proxy committed state binds complete launcher configuration"
 
-# 41. A short public oMLX model ID is never accepted for a different repository,
+# 46. A short public oMLX model ID is never accepted for a different repository,
 # and same-short-name repositories serialize through one server namespace lock.
 OMLX_PROV_BIN="$TMP/omlx-prov-bin"
 OMLX_PROV_CACHE="$TMP/omlx-prov-cache"
@@ -1195,7 +1291,7 @@ prov_lock_b="$(bash -c 'source "$1"; launcher_profile_key omlx-download-v4 http:
 assert_eq "$prov_lock_a" "$prov_lock_b" "same short-name repositories share download authority"
 pass "oMLX model acceptance is repository-provenance aware"
 
-# 42. A FIFO lock object cannot block the shell before native validation.
+# 47. A FIFO lock object cannot block the shell before native validation.
 FIFO_DIR="$TMP/fifo-lock"
 mkdir -p "$FIFO_DIR"
 mkfifo "$FIFO_DIR/test.lock"
@@ -1209,7 +1305,7 @@ assert_eq "1" "$status" "FIFO lock is rejected"
 assert_contains "$(cat "$TMP/fifo.err")" "refusing non-regular" "FIFO rejection diagnostic"
 pass "lock opening cannot hang on a FIFO pathname"
 
-# 43. Task identity is bound to both task ID and exact repository.
+# 48. Task identity is bound to both task ID and exact repository.
 OMLX_TASK_BIN="$TMP/omlx-task-id-bin"
 OMLX_TASK_ERR="$TMP/omlx-task-id.err"
 mkdir -p "$OMLX_TASK_BIN"
@@ -1224,7 +1320,7 @@ set -e
 assert_eq "3" "$status" "wrong-repository task identity is malformed"
 pass "oMLX task recovery binds the exact repository"
 
-# 44-49. Proxy schema-v2 records are self-consistent and complete-tuple bound.
+# 49-54. Proxy schema-v2 records are self-consistent and complete-tuple bound.
 PROXY_AUTH_BIN="$TMP/proxy-auth-bin"
 mkdir -p "$PROXY_AUTH_BIN"
 make_fake_command "$PROXY_AUTH_BIN/sync" ':'
@@ -1235,7 +1331,7 @@ proxy_auth_identity="$(bash -c 'source "$1"; launcher_profile_key proxy-applied-
 proxy_other_runtime="$(bash -c 'source "$1"; launcher_profile_key proxy-runtime-v2 other-service http://127.0.0.1:8081 backend=test' _ "$ROOT/bin/_launcher-common.sh")"
 proxy_other_identity="$(bash -c 'source "$1"; launcher_profile_key proxy-applied-v2 other-service alpha "$2"' _ "$ROOT/bin/_launcher-common.sh" "$proxy_other_runtime")"
 
-# 44. A committed record cannot pair a requested-model digest with another model.
+# 49. A committed record cannot pair a requested-model digest with another model.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-committed-model"
 PROXY_AUTH_LOG="$TMP/proxy-auth-committed-model.log"
 mkdir -p "$PROXY_AUTH_CACHE"
@@ -1255,7 +1351,7 @@ assert_contains "$(cat "$TMP/proxy-auth-committed-model.err")" "internally incon
 [[ ! -s "$PROXY_AUTH_LOG" ]] || fail "corrupt committed model did not restart"
 pass "proxy committed model is authenticated by its applied identity"
 
-# 45. A committed record cannot pair another service with this service's digest.
+# 50. A committed record cannot pair another service with this service's digest.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-committed-service"
 PROXY_AUTH_LOG="$TMP/proxy-auth-committed-service.log"
 mkdir -p "$PROXY_AUTH_CACHE"
@@ -1288,7 +1384,7 @@ assert_contains "$(cat "$TMP/proxy-auth-other-service.err")" "belongs to service
 [[ ! -s "$PROXY_AUTH_LOG" ]] || fail "foreign-service committed record did not restart"
 pass "proxy committed service is authenticated and path-bound"
 
-# 46. A malformed transition target identity is rejected before recovery.
+# 51. A malformed transition target identity is rejected before recovery.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-transition-target"
 PROXY_AUTH_LOG="$TMP/proxy-auth-transition-target.log"
 mkdir -p "$PROXY_AUTH_CACHE"
@@ -1308,7 +1404,7 @@ assert_contains "$(cat "$TMP/proxy-auth-transition-target.err")" "internally inc
 [[ ! -s "$PROXY_AUTH_LOG" ]] || fail "corrupt transition target did not restart"
 pass "proxy transition target records authenticate their contents"
 
-# 47. A malformed transition previous identity is also rejected.
+# 52. A malformed transition previous identity is also rejected.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-transition-previous"
 PROXY_AUTH_LOG="$TMP/proxy-auth-transition-previous.log"
 mkdir -p "$PROXY_AUTH_CACHE"
@@ -1330,7 +1426,7 @@ assert_contains "$(cat "$TMP/proxy-auth-transition-previous.err")" "internally i
 [[ ! -s "$PROXY_AUTH_LOG" ]] || fail "corrupt transition previous did not restart"
 pass "proxy transition previous records authenticate their contents"
 
-# 48. Even a digest-consistent committed record must match every request field.
+# 53. Even a digest-consistent committed record must match every request field.
 # The v2 applied digest intentionally authenticates service/model/runtime_id; the
 # listener is therefore compared explicitly as part of the complete tuple.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-committed-listen"
@@ -1348,7 +1444,7 @@ assert_file_eq "restart" "$PROXY_AUTH_LOG" "listener-mismatched commit forces re
 assert_eq "http://127.0.0.1:8081" "$(jq -r '.listen' "$PROXY_AUTH_CACHE/proxy.model.committed")" "restart replaces mismatched committed listener"
 pass "proxy fast path compares the complete committed tuple"
 
-# 49. Transition recovery likewise rejects an identity-equal but listener-different side.
+# 54. Transition recovery likewise rejects an identity-equal but listener-different side.
 PROXY_AUTH_CACHE="$TMP/proxy-auth-transition-listen"
 PROXY_AUTH_LOG="$TMP/proxy-auth-transition-listen.log"
 mkdir -p "$PROXY_AUTH_CACHE"
@@ -1368,9 +1464,9 @@ assert_contains "$(cat "$TMP/proxy-auth-transition-listen.err")" "matches neithe
 [[ ! -s "$PROXY_AUTH_LOG" ]] || fail "listener-mismatched transition did not restart"
 pass "proxy transition recovery compares complete record tuples"
 
-# 50. Every shipped shell file parses.
+# 55. Every shipped shell file parses.
 shopt -s nullglob
-for file in "$ROOT"/bin/*.sh "$ROOT"/bin/launch-* "$ROOT"/bin/ollama "$ROOT"/bin/omlx \
+for file in "$ROOT"/bin/*.sh "$ROOT"/bin/launch "$ROOT"/bin/launch-* \
     "$ROOT"/tests/*.sh; do
   bash -n "$file"
 done
